@@ -18,6 +18,20 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+# Project/cahe files
+.idea
+.ipynb*
+
+# Cython compilation files
+build
+*.c
+*.pyd
+*.pyc
+
+# Data files (too large)
+data
+
 # =========================
 # Operating System Files
 # =========================
+instructions_for_carlos.txt

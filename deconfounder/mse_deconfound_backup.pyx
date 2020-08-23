@@ -8,9 +8,10 @@ from libc.string cimport memset
 from libc.math cimport fabs
 from libc.stdio cimport printf
 
-cdef int U_EXP_IX = 0
-cdef int T_EXP_IX = 1
-cdef int OBS_IX = 2
+cdef int U_OBS_IX = 0
+cdef int T_OBS_IX = 1
+cdef int U_EXP_IX = 2
+cdef int T_EXP_IX = 3
 
 
 cdef class DeconfoundCriterion(Criterion):
@@ -49,17 +50,16 @@ cdef class DeconfoundCriterion(Criterion):
         self.weighted_n_left = 0.0
         self.weighted_n_right = 0.0
 
-        for ix in range(3):
+        for ix in range(4):
             self.sq_sum_total_arr[ix] = 0.0
             self.sq_sum_left_arr[ix] = 0.0
             self.sq_sum_right_arr[ix] = 0.0
             self.sum_total_arr[ix] = 0.0
             self.sum_left_arr[ix] = 0.0
             self.sum_right_arr[ix] = 0.0
-            if ix < OBS_IX:
-                self.weighted_n_node_arr[ix] = 0.0
-                self.weighted_n_right_arr[ix] = 0.0
-                self.weighted_n_left_arr[ix] = 0.0
+            self.weighted_n_node_arr[ix] = 0.0
+            self.weighted_n_right_arr[ix] = 0.0
+            self.weighted_n_left_arr[ix] = 0.0
 
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
@@ -85,24 +85,22 @@ cdef class DeconfoundCriterion(Criterion):
         cdef SIZE_t k
         cdef DOUBLE_t y_ik
         cdef DOUBLE_t w_y_ik
-        cdef DOUBLE_t eff_ik
-        cdef DOUBLE_t w_eff_ik
         cdef DOUBLE_t w = 1.0
         cdef int is_treated
         cdef int is_experiment
         cdef int ix
 
 
-        for ix in range(3):
+        for ix in range(4):
             self.sq_sum_total_arr[ix] = 0.0
             self.sum_total_arr[ix] = 0.0
-            if ix < OBS_IX:
-                self.weighted_n_node_arr[ix] = 0.0
+            self.weighted_n_node_arr[ix] = 0.0
 
         for p in range(start, end):
             i = samples[p]
             is_treated = self.treated[i]
-            eff_ik = self.effects[i]
+            is_experiment = self.experiment[i]
+            ix = is_treated + 2*is_experiment
 
             if sample_weight != NULL:
                 w = sample_weight[i]
@@ -110,27 +108,23 @@ cdef class DeconfoundCriterion(Criterion):
             for k in range(self.n_outputs):
                 y_ik = self.y[i, k]
                 w_y_ik = w * y_ik
-                self.sq_sum_total_arr[is_treated] += w_y_ik * y_ik
-                self.sum_total_arr[is_treated] += w_y_ik
-
-                w_eff_ik = w * eff_ik
-                self.sq_sum_total_arr[OBS_IX] += w_eff_ik * eff_ik
-                self.sum_total_arr[OBS_IX] += w_eff_ik
+                self.sq_sum_total_arr[ix] += w_y_ik * y_ik
+                self.sum_total_arr[ix] += w_y_ik
 
                 if self.largest_y < fabs(y_ik):
                     self.largest_y = fabs(y_ik)
 
-            self.weighted_n_node_arr[is_treated] += w
+            self.weighted_n_node_arr[ix] += w
 
-        for is_treated in range(2):
-            self.weighted_n_node_samples += self.weighted_n_node_arr[is_treated]
+        for ix in range(4):
+            self.weighted_n_node_samples += self.weighted_n_node_arr[ix]
 
         # Reset to pos=start
         self.reset()
 
-        for is_treated in range(2):
-            self.weighted_n_left += self.weighted_n_left_arr[is_treated]
-            self.weighted_n_right += self.weighted_n_right_arr[is_treated]
+        for ix in range(4):
+            self.weighted_n_left = self.weighted_n_left_arr[ix]
+            self.weighted_n_right = self.weighted_n_right_arr[ix]
 
         return 0
 
@@ -138,14 +132,13 @@ cdef class DeconfoundCriterion(Criterion):
         """Reset the criterion at pos=start."""
         cdef int ix
 
-        for ix in range(3):
+        for ix in range(4):
             self.sum_left_arr[ix] = 0.0
             self.sq_sum_left_arr[ix] = 0.0
             self.sum_right_arr[ix] = self.sum_total_arr[ix]
             self.sq_sum_right_arr[ix] = self.sq_sum_total_arr[ix]
-            if ix < OBS_IX:
-                self.weighted_n_left_arr[ix] = 0.0
-                self.weighted_n_right_arr[ix] = self.weighted_n_node_arr[ix]
+            self.weighted_n_left_arr[ix] = 0.0
+            self.weighted_n_right_arr[ix] = self.weighted_n_node_arr[ix]
 
         self.pos = self.start
         return 0
@@ -154,14 +147,13 @@ cdef class DeconfoundCriterion(Criterion):
         """Reset the criterion at pos=end."""
         cdef int ix
 
-        for ix in range(3):
+        for ix in range(4):
             self.sum_left_arr[ix] = self.sum_total_arr[ix]
             self.sq_sum_left_arr[ix] = self.sq_sum_total_arr[ix]
             self.sum_right_arr[ix] = 0.0
             self.sq_sum_right_arr[ix] = 0.0
-            if ix < OBS_IX:
-                self.weighted_n_left_arr[ix] = self.weighted_n_node_arr[ix]
-                self.weighted_n_right_arr[ix] = 0.0
+            self.weighted_n_left_arr[ix] = self.weighted_n_node_arr[ix]
+            self.weighted_n_right_arr[ix] = 0.0
 
         self.pos = self.end
         return 0
@@ -187,8 +179,6 @@ cdef class DeconfoundCriterion(Criterion):
         cdef SIZE_t k
         cdef DOUBLE_t y_ik
         cdef DOUBLE_t w_y_ik
-        cdef DOUBLE_t eff_ik
-        cdef DOUBLE_t w_eff_ik
         cdef DOUBLE_t w = 1.0
         cdef int is_treated
         cdef int is_experiment
@@ -206,7 +196,8 @@ cdef class DeconfoundCriterion(Criterion):
             for p in range(pos, new_pos):
                 i = samples[p]
                 is_treated = self.treated[i]
-                eff_ik = self.effects[i]
+                is_experiment = self.experiment[i]
+                ix = is_treated + 2 * is_experiment
 
                 if sample_weight != NULL:
                     w = sample_weight[i]
@@ -214,21 +205,18 @@ cdef class DeconfoundCriterion(Criterion):
                 for k in range(self.n_outputs):
                     y_ik = self.y[i, k]
                     w_y_ik = w * y_ik
-                    sum_left[is_treated] += w_y_ik
-                    sq_sum_left[is_treated] += w_y_ik * y_ik
+                    sum_left[ix] += w_y_ik
+                    sq_sum_left[ix] += w_y_ik * y_ik
 
-                    w_eff_ik = w * eff_ik
-                    sum_left[OBS_IX] += w_eff_ik * eff_ik
-                    sq_sum_left[OBS_IX] += w_eff_ik
-
-                self.weighted_n_left_arr[is_treated] += w
+                self.weighted_n_left_arr[ix] += w
         else:
             self.reverse_reset()
 
             for p in range(end - 1, new_pos - 1, -1):
                 i = samples[p]
                 is_treated = self.treated[i]
-                eff_ik = self.effects[i]
+                is_experiment = self.experiment[i]
+                ix = is_treated + 2 * is_experiment
 
                 if sample_weight != NULL:
                     w = sample_weight[i]
@@ -236,22 +224,17 @@ cdef class DeconfoundCriterion(Criterion):
                 for k in range(self.n_outputs):
                     y_ik = self.y[i, k]
                     w_y_ik = w * y_ik
-                    sum_left[is_treated] -= w_y_ik
-                    sq_sum_left[is_treated] -= w_y_ik * y_ik
+                    sum_left[ix] -= w_y_ik
+                    sq_sum_left[ix] -= w_y_ik * y_ik
 
-                    w_eff_ik = w * eff_ik
-                    sum_left[OBS_IX] -= w_eff_ik * eff_ik
-                    sq_sum_left[OBS_IX] -= w_eff_ik
-
-                self.weighted_n_left_arr[is_treated] -= w
+                self.weighted_n_left_arr[ix] -= w
 
         self.weighted_n_left = 0
-        for ix in range(3):
+        for ix in range(4):
             sum_right[ix] = sum_total[ix] - sum_left[ix]
             sq_sum_right[ix] = sq_sum_total[ix] - sq_sum_left[ix]
-            if ix < OBS_IX:
-                self.weighted_n_right_arr[ix] = self.weighted_n_node_arr[ix] - self.weighted_n_left_arr[ix]
-                self.weighted_n_left += self.weighted_n_left_arr[ix]
+            self.weighted_n_right_arr[ix] = self.weighted_n_node_arr[ix] - self.weighted_n_left_arr[ix]
+            self.weighted_n_left += self.weighted_n_left_arr[ix]
         self.weighted_n_right = (self.weighted_n_node_samples - self.weighted_n_left)
 
         self.pos = new_pos
@@ -276,20 +259,15 @@ cdef class DeconfoundCriterion(Criterion):
         cdef double bias
         cdef double obs_effect
         cdef double exp_effect
-        cdef double size
         cdef int ix
         cdef int missing_data = 0
 
-        for ix in range(3):
+        for ix in range(4):
             # Variance in the estimates (s^2/N_u)
             if sample_weight[ix] > 0:
-                if ix < OBS_IX:
-                    size = sample_weight[ix]
-                else:
-                    size = sample_weight[U_EXP_IX] + sample_weight[T_EXP_IX]
-                variance = sq_sum_total[ix] / size
-                variance -= (sum_total[ix] / size)**2.0
-                variance /= size
+                variance = sq_sum_total[ix] / sample_weight[ix]
+                variance -= (sum_total[ix] / sample_weight[ix])**2.0
+                variance /= sample_weight[ix]
                 impurity += variance
             else:
                 missing_data = 1
@@ -299,7 +277,8 @@ cdef class DeconfoundCriterion(Criterion):
             impurity += self.largest_y ** 2 + 1
         else:
             # Heterogeneity in treatments
-            obs_effect = sum_total[OBS_IX] / (sample_weight[U_EXP_IX] + sample_weight[T_EXP_IX])
+            obs_effect = sum_total[T_OBS_IX] / sample_weight[T_OBS_IX]
+            obs_effect -= sum_total[U_OBS_IX] / sample_weight[U_OBS_IX]
             exp_effect = sum_total[T_EXP_IX] / sample_weight[T_EXP_IX]
             exp_effect -= sum_total[U_EXP_IX] / sample_weight[U_EXP_IX]
             bias = obs_effect - exp_effect
@@ -333,17 +312,17 @@ cdef class DeconfoundCriterion(Criterion):
         """Compute the node value of samples[start:end] into dest."""
 
         cdef SIZE_t k
-        cdef double avg_t_exp
-        cdef double avg_u_exp
-        cdef double avg_eff_obs
+        cdef double avg_t
+        cdef double avg_u
 
         for k in range(self.n_outputs):
             # The max is included as quick-fix for zero division
-            avg_eff_obs = self.sum_total_arr[OBS_IX] / max(1, self.weighted_n_node_samples)
+            avg_t_obs = self.sum_total_arr[T_OBS_IX] / max(1, self.weighted_n_node_arr[T_OBS_IX])
+            avg_u_obs = self.sum_total_arr[U_OBS_IX] / max(1, self.weighted_n_node_arr[U_OBS_IX])
             avg_t_exp = self.sum_total_arr[T_EXP_IX] / max(1, self.weighted_n_node_arr[T_EXP_IX])
             avg_u_exp = self.sum_total_arr[U_EXP_IX] / max(1, self.weighted_n_node_arr[U_EXP_IX])
-            dest[k] = avg_eff_obs  - (avg_t_exp - avg_u_exp)
+            dest[k] = (avg_t_obs - avg_u_obs) - (avg_t_exp - avg_u_exp)
 
-    def set_treated_and_effects(self, int[:] treated, double[:] effects):
+    def set_treated_experiment(self, int[:] treated, int[:] experiment):
         self.treated = treated
-        self.effects = effects
+        self.experiment = experiment

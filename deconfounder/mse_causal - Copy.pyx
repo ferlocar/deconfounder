@@ -243,20 +243,31 @@ cdef class CausalCriterion(Criterion):
         cdef int is_treated
         cdef int missing_data = 0
 
-        if (sample_weight[T_IX] > 0) and (sample_weight[U_IX] > 0):
-            for is_treated in range(2):
-                # Variance in the estimates (s^2/N_u)
+
+
+        for is_treated in range(2):
+            # Variance in the estimates (s^2/N_u)
+            if sample_weight[is_treated] > 0:
                 variance = sq_sum_total[is_treated] / sample_weight[is_treated]
                 variance -= (sum_total[is_treated] / sample_weight[is_treated])**2.0
                 variance /= sample_weight[is_treated]
                 impurity += variance
-        # Heterogeneity in treatments
+                printf("ALL GOOD! is_treated %f\n", is_treated)
+            else:
+                printf("MISSING! is_treated %f\n", is_treated)
+                printf("MISSING! sample_weight %f\n", sample_weight[is_treated])
+                missing_data = 1
+
+        if missing_data:
+            printf("MISSING 2! is_treated %f\n", is_treated)
+
+            # In the case of missing data, the impurity should be very large so the split is not done
+            impurity += self.largest_y ** 2 + 1
+        else:
+            # Heterogeneity in treatments
             effect = sum_total[T_IX] / sample_weight[T_IX]
             effect -= sum_total[U_IX] / sample_weight[U_IX]
             impurity -= effect**2
-        else:
-            # In the case of missing data, the impurity should be very large so the split is not done
-            impurity += self.largest_y ** 2 + 1
 
         # The SKLEARN tree requires impurity to be greater than 0.
         # So, we sum this constant to make sure it does.

@@ -32,6 +32,8 @@ cdef class CausalCriterion(Criterion):
             The total number of samples to fit on
         """
         cdef int is_treated
+        
+        print("ENTER CINIT")
 
         # Default values
         self.sample_weight = NULL
@@ -66,6 +68,7 @@ cdef class CausalCriterion(Criterion):
                   SIZE_t end) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end]."""
+        printf("START INIT!")
         # Initialize fields
         self.y = y
         self.sample_weight = sample_weight
@@ -114,11 +117,12 @@ cdef class CausalCriterion(Criterion):
         self.reset()
         self.weighted_n_left = self.weighted_n_left_arr[U_IX] + self.weighted_n_right_arr[T_IX]
         self.weighted_n_right = self.weighted_n_right_arr[U_IX] + self.weighted_n_right_arr[T_IX]
-
+        printf("END INIT!")
         return 0
 
     cdef int reset(self) nogil except -1:
         """Reset the criterion at pos=start."""
+        printf("START RESET!")
         cdef int is_treated
 
         for is_treated in range(2):
@@ -130,10 +134,12 @@ cdef class CausalCriterion(Criterion):
             self.weighted_n_right_arr[is_treated] = self.weighted_n_node_arr[is_treated]
 
         self.pos = self.start
+        printf("END RESET!")
         return 0
 
     cdef int reverse_reset(self) nogil except -1:
         """Reset the criterion at pos=end."""
+        printf("START REVERSE RESET!")
         cdef int is_treated
 
         for is_treated in range(2):
@@ -145,6 +151,7 @@ cdef class CausalCriterion(Criterion):
             self.weighted_n_right_arr[is_treated] = 0.0
 
         self.pos = self.end
+        printf("END REVERSE RESET!")
         return 0
 
     cdef int update(self, SIZE_t new_pos) nogil except -1:
@@ -243,20 +250,24 @@ cdef class CausalCriterion(Criterion):
         cdef int is_treated
         cdef int missing_data = 0
 
-        if (sample_weight[T_IX] > 0) and (sample_weight[U_IX] > 0):
-            for is_treated in range(2):
-                # Variance in the estimates (s^2/N_u)
+        for is_treated in range(2):
+            # Variance in the estimates (s^2/N_u)
+            if sample_weight[is_treated] > 0:
                 variance = sq_sum_total[is_treated] / sample_weight[is_treated]
                 variance -= (sum_total[is_treated] / sample_weight[is_treated])**2.0
                 variance /= sample_weight[is_treated]
                 impurity += variance
-        # Heterogeneity in treatments
+            else:
+                missing_data = 1
+
+        if missing_data:
+            # In the case of missing data, the impurity should be very large so the split is not done
+            impurity += self.largest_y ** 2 + 1
+        else:
+            # Heterogeneity in treatments
             effect = sum_total[T_IX] / sample_weight[T_IX]
             effect -= sum_total[U_IX] / sample_weight[U_IX]
             impurity -= effect**2
-        else:
-            # In the case of missing data, the impurity should be very large so the split is not done
-            impurity += self.largest_y ** 2 + 1
 
         # The SKLEARN tree requires impurity to be greater than 0.
         # So, we sum this constant to make sure it does.
@@ -296,4 +307,6 @@ cdef class CausalCriterion(Criterion):
             dest[k] = avg_t - avg_u
 
     def set_treated(self, int[:] treated):
+        printf("START SET TREATED!")
         self.treated = treated
+        printf("END SET TREATED!")

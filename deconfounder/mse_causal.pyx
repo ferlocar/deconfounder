@@ -1,6 +1,5 @@
 from sklearn.tree._criterion cimport Criterion
 from sklearn.tree._criterion cimport SIZE_t
-import numpy as np
 
 from libc.stdlib cimport calloc
 from libc.stdlib cimport free
@@ -35,7 +34,7 @@ cdef class CausalCriterion(Criterion):
         cdef int is_treated
 
         # Default values
-        # self.sample_weight = NULL
+        self.sample_weight = NULL
 
         self.samples = NULL
         self.start = 0
@@ -61,16 +60,8 @@ cdef class CausalCriterion(Criterion):
 
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
-    
-    def __getstate__(self):
-        d = {}
-        d['treated'] = np.asarray(self.treated)
-        return d
 
-    def __setstate__(self, d):
-        self.treated = np.asarray(d['treated'])
-
-    cdef int init(self, const DOUBLE_t[:, ::1] y, const DOUBLE_t[:] sample_weight,
+    cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
@@ -93,19 +84,19 @@ cdef class CausalCriterion(Criterion):
         cdef DOUBLE_t w_y_ik
         cdef DOUBLE_t w = 1.0
         cdef int is_treated
-       
+
         for is_treated in range(2):
             self.sq_sum_total_arr[is_treated] = 0.0
             self.sum_total_arr[is_treated] = 0.0
             self.weighted_n_node_arr[is_treated] = 0.0
-        
+
         for p in range(start, end):
             i = samples[p]
             is_treated = self.treated[i]
-            
-            if sample_weight is not None:
+
+            if sample_weight != NULL:
                 w = sample_weight[i]
-            
+
             for k in range(self.n_outputs):
                 y_ik = self.y[i, k]
                 w_y_ik = w * y_ik
@@ -114,11 +105,11 @@ cdef class CausalCriterion(Criterion):
 
                 if self.largest_y < fabs(y_ik):
                     self.largest_y = fabs(y_ik)
-            
+
             self.weighted_n_node_arr[is_treated] += w
-        
+
         self.weighted_n_node_samples = self.weighted_n_node_arr[U_IX] + self.weighted_n_node_arr[T_IX]
-        
+
         # Reset to pos=start
         self.reset()
         self.weighted_n_left = self.weighted_n_left_arr[U_IX] + self.weighted_n_right_arr[T_IX]
@@ -167,7 +158,7 @@ cdef class CausalCriterion(Criterion):
         cdef double* sq_sum_right = self.sq_sum_right_arr
         cdef double* sq_sum_total = self.sq_sum_total_arr
 
-        cdef const DOUBLE_t[:] sample_weight = self.sample_weight
+        cdef double* sample_weight = self.sample_weight
         cdef SIZE_t* samples = self.samples
 
         cdef SIZE_t pos = self.pos
@@ -193,7 +184,7 @@ cdef class CausalCriterion(Criterion):
                 i = samples[p]
                 is_treated = self.treated[i]
 
-                if sample_weight is not None:
+                if sample_weight != NULL:
                     w = sample_weight[i]
 
                 for k in range(self.n_outputs):
@@ -210,7 +201,7 @@ cdef class CausalCriterion(Criterion):
                 i = samples[p]
                 is_treated = self.treated[i]
 
-                if sample_weight is not None:
+                if sample_weight != NULL:
                     w = sample_weight[i]
 
                 for k in range(self.n_outputs):

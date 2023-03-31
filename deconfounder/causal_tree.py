@@ -1,19 +1,20 @@
 from sklearn.tree import DecisionTreeRegressor
-from mse_causal import CausalCriterion
+from .mse_causal import CausalCriterion
 import pandas as pd
 import numpy as np
 
 class CausalTree(DecisionTreeRegressor):
 
-    def fit(self, X, y, sample_weight=None, check_input=True):
+    def fit(self, X, y, sample_weight=None, check_input=True, X_idx_sorted=None):
         """
         Replaces the string stored in criterion by an instance of a class.
         """
         self.criterion = CausalCriterion(1, X.shape[0])
-        treated = X.treated.values.astype('int32')
+        treated = X.treated.values.astype(int)
         self.criterion.set_treated(treated)
         X_base = X.loc[:, X.columns != 'treated']
-        DecisionTreeRegressor.fit(self, X_base, y, sample_weight=sample_weight, check_input=check_input)
+        DecisionTreeRegressor.fit(self, X_base, y, sample_weight=sample_weight, check_input=check_input,
+                                  X_idx_sorted=X_idx_sorted)
         return self
 
     def predict(self, X, check_input=True):

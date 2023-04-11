@@ -1,5 +1,6 @@
 from sklearn.tree._criterion cimport Criterion
 from sklearn.tree._criterion cimport SIZE_t
+import numpy as np
 
 from libc.stdlib cimport calloc
 from libc.stdlib cimport free
@@ -36,7 +37,7 @@ cdef class DeconfoundCriterion(Criterion):
         cdef int ix
 
         # Default values
-        self.sample_weight = NULL
+        # self.sample_weight = NULL
 
         self.samples = NULL
         self.start = 0
@@ -64,7 +65,17 @@ cdef class DeconfoundCriterion(Criterion):
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
 
-    cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
+    def __getstate__(self):
+        d = {}
+        d['treated'] = np.asarray(self.treated)
+        d['experiment'] = np.asarray(self.experiment)
+        return d
+
+    def __setstate__(self, d):
+        self.treated = np.asarray(d['treated'])
+        self.experiment = np.asarray(d['experiment'])
+
+    cdef int init(self, const DOUBLE_t[:, ::1] y, const DOUBLE_t[:] sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
@@ -90,7 +101,6 @@ cdef class DeconfoundCriterion(Criterion):
         cdef int is_experiment
         cdef int ix
 
-
         for ix in range(4):
             self.sq_sum_total_arr[ix] = 0.0
             self.sum_total_arr[ix] = 0.0
@@ -101,8 +111,7 @@ cdef class DeconfoundCriterion(Criterion):
             is_treated = self.treated[i]
             is_experiment = self.experiment[i]
             ix = is_treated + 2*is_experiment
-
-            if sample_weight != NULL:
+            if sample_weight is not None:
                 w = sample_weight[i]
 
             for k in range(self.n_outputs):
@@ -125,7 +134,6 @@ cdef class DeconfoundCriterion(Criterion):
         for ix in range(4):
             self.weighted_n_left = self.weighted_n_left_arr[ix]
             self.weighted_n_right = self.weighted_n_right_arr[ix]
-
         return 0
 
     cdef int reset(self) nogil except -1:
@@ -169,7 +177,7 @@ cdef class DeconfoundCriterion(Criterion):
         cdef double* sq_sum_right = self.sq_sum_right_arr
         cdef double* sq_sum_total = self.sq_sum_total_arr
 
-        cdef double* sample_weight = self.sample_weight
+        cdef const DOUBLE_t[:] sample_weight = self.sample_weight
         cdef SIZE_t* samples = self.samples
 
         cdef SIZE_t pos = self.pos
@@ -191,7 +199,6 @@ cdef class DeconfoundCriterion(Criterion):
         # and that sum_total is known, we are going to update
         # sum_left from the direction that require the least amount
         # of computations, i.e. from pos to new_pos or from end to new_pos.
-
         if (new_pos - pos) <= (end - new_pos):
             for p in range(pos, new_pos):
                 i = samples[p]
@@ -199,7 +206,7 @@ cdef class DeconfoundCriterion(Criterion):
                 is_experiment = self.experiment[i]
                 ix = is_treated + 2 * is_experiment
 
-                if sample_weight != NULL:
+                if sample_weight is not None:
                     w = sample_weight[i]
 
                 for k in range(self.n_outputs):
@@ -218,7 +225,7 @@ cdef class DeconfoundCriterion(Criterion):
                 is_experiment = self.experiment[i]
                 ix = is_treated + 2 * is_experiment
 
-                if sample_weight != NULL:
+                if sample_weight is not None:
                     w = sample_weight[i]
 
                 for k in range(self.n_outputs):
@@ -228,7 +235,6 @@ cdef class DeconfoundCriterion(Criterion):
                     sq_sum_left[ix] -= w_y_ik * y_ik
 
                 self.weighted_n_left_arr[ix] -= w
-
         self.weighted_n_left = 0
         for ix in range(4):
             sum_right[ix] = sum_total[ix] - sum_left[ix]

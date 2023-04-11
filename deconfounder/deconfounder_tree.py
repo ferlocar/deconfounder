@@ -1,22 +1,21 @@
 from sklearn.tree import DecisionTreeRegressor
-from .mse_deconfound import DeconfoundCriterion
+from mse_deconfound import DeconfoundCriterion
 import pandas as pd
 import numpy as np
 
 class DeconfounderTree(DecisionTreeRegressor):
 
-    def fit(self, X, y, sample_weight=None, check_input=True, X_idx_sorted=None):
+    def fit(self, X, y, sample_weight=None, check_input=True):
         """
         Replaces the string stored in criterion by an instance of a class.
         """
         self.criterion = DeconfoundCriterion(1, X.shape[0])
-        treated = X.treated.values.astype(int)
-        experiment = X.experiment.values.astype(int)
+        treated = X.treated.values.astype('int32')
+        experiment = X.experiment.values.astype('int32')
         self.criterion.set_treated_experiment(treated, experiment)
         X_base = X.loc[:, X.columns != 'treated']
         X_base = X_base.loc[:, X_base.columns != 'experiment']
-        DecisionTreeRegressor.fit(self, X_base, y, sample_weight=sample_weight, check_input=check_input,
-                                  X_idx_sorted=X_idx_sorted)
+        DecisionTreeRegressor.fit(self, X_base, y, sample_weight=sample_weight, check_input=check_input)
         return self
 
     def predict(self, X, check_input=True):

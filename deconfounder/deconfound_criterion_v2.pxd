@@ -9,17 +9,13 @@ cdef struct BoundaryRecord:
     double weighted_r
 
 cdef class DeconfoundCriterionV2(Criterion):
-    cdef double r_u_all_total # reward if we untreat all individuals
-    cdef double r_u_all_left
-    cdef double r_u_all_right
-    cdef double[2] sum_total_arr
-    cdef double[2] sum_left_arr
-    cdef double[2] sum_right_arr
-    cdef double[2] weighted_n_node_arr      # sum the sample weights
-    cdef double[2] weighted_n_left_arr
-    cdef double[2] weighted_n_right_arr
-    cdef double[:] sorted_predictions
-    cdef SIZE_t[:] sorted_samples
+    cdef double r_u_all_total   # reward if we untreat all individuals
+    cdef double r_u_all_left    # reward if we untreat all individuals in th left node
+    cdef double r_u_all_right   # reward if we untreat all individuals in the right node
+
+    cdef int[:] mask_total  # indicate which samples are in the node
+    cdef int[:] mask_left   # indicate which samples are in the left node
+    cdef int[:] mask_right  # indicate which samples are in the right node
 
     cdef int[:] treated  # Defines which observations were treated
     cdef double[:] predictions # Predicted effects by the observational model
@@ -29,5 +25,5 @@ cdef class DeconfoundCriterionV2(Criterion):
 
     # Replicate variables for the TREATED
 
-    cdef BoundaryRecord decision_boundary(self, double r_t_all, SIZE_t start, SIZE_t end) nogil
-    cdef double get_impurity(self, double r_u_all, SIZE_t start, SIZE_t end, double weighted_n_samples) nogil
+    cdef BoundaryRecord decision_boundary(self, double r_t_all, int[:] mask) nogil
+    cdef double get_impurity(self, double r_u_all, int[:] mask, double weighted_n_samples) nogil

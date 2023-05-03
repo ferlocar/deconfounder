@@ -57,16 +57,9 @@ cdef class DeconfoundCriterionV2(Criterion):
         self.weighted_n_left = 0.0
         self.weighted_n_right = 0.0
 
-        for is_treated in range(2):
-            self.sum_total_arr[is_treated] = 0.0
-            self.sum_left_arr[is_treated] = 0.0
-            self.sum_right_arr[is_treated] = 0.0
-            self.weighted_n_node_arr[is_treated] = 0.0
-            self.weighted_n_right_arr[is_treated] = 0.0
-            self.weighted_n_left_arr[is_treated] = 0.0
-
-        self.sorted_predictions = np.empty(n_samples, dtype=np.float64)
-        self.sorted_samples = np.empty(n_samples, dtype=np.intp)
+        self.mask_total = np.zeros(n_samples, dtype=np.int32)
+        self.mask_left = np.zeros(n_samples, dtype=np.int32)
+        self.mask_right = np.zeros(n_samples, dtype=np.int32)
 
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
@@ -109,11 +102,10 @@ cdef class DeconfoundCriterionV2(Criterion):
         cdef DOUBLE_t w_y_ik
         cdef DOUBLE_t w = 1.0
         cdef int is_treated
-       
-        for is_treated in range(2):
-            self.sum_total_arr[is_treated] = 0.0
-            self.weighted_n_node_arr[is_treated] = 0.0
-        
+
+        for i in range(self.n_samples):
+            self.mask_total[i] = 0
+
         for p in range(start, end):
             i = samples[p]
             is_treated = self.treated[i]
@@ -124,7 +116,6 @@ cdef class DeconfoundCriterionV2(Criterion):
             for k in range(self.n_outputs):
                 y_ik = self.y[i, k]
                 w_y_ik = w * y_ik
-                self.sum_total_arr[is_treated] += w_y_ik
 
                 if not is_treated:
                     self.r_u_all_total += w_y_ik
@@ -132,46 +123,42 @@ cdef class DeconfoundCriterionV2(Criterion):
                 if self.largest_y < fabs(y_ik):
                     self.largest_y = fabs(y_ik)
 
-            self.weighted_n_node_arr[is_treated] += w
-        
-        self.weighted_n_node_samples = self.weighted_n_node_arr[U_IX] + self.weighted_n_node_arr[T_IX]
+            self.weighted_n_node_samples += w
+            self.mask_total[i] = 1
         
         # Reset to pos=start
         self.reset()
-        self.weighted_n_left = self.weighted_n_left_arr[U_IX] + self.weighted_n_right_arr[T_IX]
-        self.weighted_n_right = self.weighted_n_right_arr[U_IX] + self.weighted_n_right_arr[T_IX]
 
         return 0
 
     cdef int reset(self) nogil except -1:
         """Reset the criterion at pos=start."""
-        cdef int is_treated
-
-        for is_treated in range(2):
-            self.sum_left_arr[is_treated] = 0.0
-            self.sum_right_arr[is_treated] = self.sum_total_arr[is_treated]
-            self.weighted_n_left_arr[is_treated] = 0.0
-            self.weighted_n_right_arr[is_treated] = self.weighted_n_node_arr[is_treated]
+        cdef SIZE_t i
 
         self.r_u_all_left = 0.0
         self.r_u_all_right = self.r_u_all_total
+        self.weighted_n_left = 0.0
+        self.weighted_n_right = self.weighted_n_node_samples
         self.pos = self.start
+        
+        for i in range(self.n_samples):
+            self.mask_left[i] = 0
+            self.mask_right[i] = self.mask_total[i]
         return 0
 
     cdef int reverse_reset(self) nogil except -1:
         """Reset the criterion at pos=end."""
-        cdef int is_treated
-
-        for is_treated in range(2):
-            self.sum_left_arr[is_treated] = self.sum_total_arr[is_treated]
-            self.sum_right_arr[is_treated] = 0.0
-            self.weighted_n_left_arr[is_treated] = self.weighted_n_node_arr[is_treated]
-            self.weighted_n_right_arr[is_treated] = 0.0
+        cdef SIZE_t i
 
         self.r_u_all_left = self.r_u_all_total
         self.r_u_all_right = 0.0
-
+        self.weighted_n_left = self.weighted_n_node_samples
+        self.weighted_n_right = 0.0
         self.pos = self.end
+
+        for i in range(self.n_samples):
+            self.mask_left[i] = self.mask_total[i]
+            self.mask_right[i] = 0
         return 0
 
     cdef int update(self, SIZE_t new_pos) nogil except -1:
@@ -179,6 +166,7 @@ cdef class DeconfoundCriterionV2(Criterion):
 
         cdef const DOUBLE_t[:] sample_weight = self.sample_weight
         cdef SIZE_t* samples = self.samples
+        cdef double[:] predictions = self.predictions
 
         cdef SIZE_t pos = self.pos
         cdef SIZE_t end = self.end
@@ -197,7 +185,7 @@ cdef class DeconfoundCriterionV2(Criterion):
         # and that sum_total is known, we are going to update
         # sum_left from the direction that require the least amount
         # of computations, i.e. from pos to new_pos or from end to new_pos.
-
+        
         if (new_pos - pos) <= (end - new_pos):
             for p in range(pos, new_pos):
                 i = samples[p]
@@ -209,12 +197,14 @@ cdef class DeconfoundCriterionV2(Criterion):
                 for k in range(self.n_outputs):
                     y_ik = self.y[i, k]
                     w_y_ik = w * y_ik
-                    self.sum_left_arr[is_treated] += w_y_ik
 
                     if not is_treated:
                         self.r_u_all_left += w_y_ik
 
-                self.weighted_n_left_arr[is_treated] += w
+                self.weighted_n_left += w
+                self.mask_left[i] = 1
+                self.mask_right[i] = 0
+
         else:
             self.reverse_reset()
 
@@ -228,97 +218,69 @@ cdef class DeconfoundCriterionV2(Criterion):
                 for k in range(self.n_outputs):
                     y_ik = self.y[i, k]
                     w_y_ik = w * y_ik
-                    self.sum_left_arr[is_treated] -= w_y_ik
 
                     if not is_treated:
                         self.r_u_all_left -= w_y_ik
 
-                self.weighted_n_left_arr[is_treated] -= w
-
-        for is_treated in range(2):
-            self.sum_right_arr[is_treated] = self.sum_total_arr[is_treated] - self.sum_left_arr[is_treated]
-            self.weighted_n_right_arr[is_treated] = (self.weighted_n_node_arr[is_treated] -
-                                                     self.weighted_n_left_arr[is_treated])
+                self.weighted_n_left -= w
+                self.mask_left[i] = 0
+                self.mask_right[i] = 1
 
         self.r_u_all_right = self.r_u_all_total - self.r_u_all_left
-        self.weighted_n_left = self.weighted_n_left_arr[T_IX] + self.weighted_n_left_arr[U_IX]
         self.weighted_n_right = (self.weighted_n_node_samples - self.weighted_n_left)
 
         self.pos = new_pos
 
         return 0
 
-    cdef BoundaryRecord decision_boundary(self, double r_u_all, SIZE_t start, SIZE_t end) nogil:
-
-        #printf("start = %ld, end = %ld\n", start, end)
-        #printf("\n")
-
+    cdef BoundaryRecord decision_boundary(self, double r_u_all, int[:] mask) nogil:
+        
         cdef BoundaryRecord curr, best
-
-        cdef double[:] pred_op = self.sorted_predictions
-        cdef SIZE_t[:] samples = self.sorted_samples
-
-        cdef DOUBLE_t w = 1.0
-        cdef DOUBLE_t w_y_i0
-        cdef SIZE_t is_treated
-
+        cdef double w = 1.0
+        cdef double w_y_i0
         cdef SIZE_t i
-        cdef SIZE_t p
 
         curr.bias = INFINITY
-        curr.r_t = 0.0
         curr.r_u = r_u_all
-        curr.weighted_r = curr.r_u / self.p_u
+        curr.r_t = 0.0
+        curr.weighted_r = r_u_all / self.p_u
         best = curr
 
-        # sort samples by prediction values in descending order
-        for p in range(start, end):
-            samples[p] = self.samples[p]
-            pred_op[p] = -self.predictions[samples[p]]
-            
-        sort(&pred_op[start], &samples[start], end-start)
+        for i in range(self.n_samples):
+            if not mask[i]:     # the sample not in the node
+                continue
 
-        #printf("curr_bias = %lf, curr_r = %lf\n", curr.bias, curr.weighted_r)
-        p = start
-        while p < end:
-            while True:
-                i = samples[p]
-                is_treated = self.treated[i]
+            # check if two samples have the same prediction values, if do, place them in the same group;
+            # otherwise, calculate the reward for this bias.
+            if (curr.bias > self.predictions[i] + PRED_THRESHOLD):      
+                curr.weighted_r = curr.r_t / self.p_t + curr.r_u / self.p_u
+                if curr.weighted_r > best.weighted_r:
+                    best = curr
 
-                if self.sample_weight is not None:
-                    w = self.sample_weight[i]
+            if self.sample_weight is not None:
+                w = self.sample_weight[i]
+            w_y_i0 = w * self.y[i, 0]
 
-                w_y_i0 = w * self.y[i, 0]
+            if self.treated[i]:
+                curr.r_t += w_y_i0
+            else:
+                curr.r_u -= w_y_i0
 
-                curr.bias = self.predictions[i]
+            curr.bias = self.predictions[i]
 
-                if is_treated:
-                    curr.r_t += w_y_i0
-                else:
-                    curr.r_u -= w_y_i0
+        curr.weighted_r = curr.r_t / self.p_t + curr.r_u / self.p_u
+        if curr.weighted_r > best.weighted_r:
+            best = curr
 
-                if (p + 1 < end) and (self.predictions[i] <= self.predictions[samples[p+1]] + PRED_THRESHOLD):
-                    p += 1
-                else:
-                    break
-
-            curr.weighted_r = curr.r_t / self.p_t + curr.r_u / self.p_u
-            #printf("curr_bias = %lf, curr_r = %lf\n", curr.bias, curr.weighted_r)
-            if curr.weighted_r > best.weighted_r:
-                best = curr
-            p += 1
-        #printf("best_bias = %lf, best_r = %lf\n", best.bias, best.weighted_r)
-        #printf("\n")
         return best
 
-
-    cdef double get_impurity(self, double r_u_all, SIZE_t start, SIZE_t end, double weighted_n_samples) nogil:
+    cdef double get_impurity(self, double r_u_all, int[:] mask, double weighted_n_samples) nogil:
 
         cdef double impurity = 0.
         cdef BoundaryRecord boundary
 
         # decision boundary
-        boundary = self.decision_boundary(r_u_all, start, end)
+        boundary = self.decision_boundary(r_u_all, mask)
 
         # impurity
         impurity = - boundary.weighted_r / max(1, weighted_n_samples)
@@ -337,7 +299,7 @@ cdef class DeconfoundCriterionV2(Criterion):
         cdef double impurity_k
 
         for k in range(self.n_outputs):
-            impurity_k = self.get_impurity(self.r_u_all_total, self.start, self.end, self.weighted_n_node_samples)
+            impurity_k = self.get_impurity(self.r_u_all_total, self.mask_total, self.weighted_n_node_samples)
             impurity += impurity_k
 
         return impurity / self.n_outputs
@@ -352,8 +314,8 @@ cdef class DeconfoundCriterionV2(Criterion):
         impurity_right[0] = 0
 
         for k in range(self.n_outputs):
-            impurity_left[0] += self.get_impurity(self.r_u_all_left, self.start, self.pos, self.weighted_n_left)
-            impurity_right[0] += self.get_impurity(self.r_u_all_right, self.pos, self.end, self.weighted_n_right)
+            impurity_left[0] += self.get_impurity(self.r_u_all_left, self.mask_left, self.weighted_n_left)
+            impurity_right[0] += self.get_impurity(self.r_u_all_right, self.mask_right, self.weighted_n_right)
 
         impurity_left[0] /= self.n_outputs
         impurity_right[0] /= self.n_outputs
@@ -366,124 +328,11 @@ cdef class DeconfoundCriterionV2(Criterion):
         cdef BoundaryRecord boundary
 
         for k in range(self.n_outputs):
-            boundary = self.decision_boundary(self.r_u_all_total, self.start, self.end)
-            dest[k] = boundary.bias
+            boundary = self.decision_boundary(self.r_u_all_total, self.mask_total)
+            dest[k] = boundary.bias-(1e-7)  # ensure the samples on the boundary line greater than the decision threshold, so that being treated.
 
     def set_additional_parameters(self, int[:] treated, double[:] predictions, double p_t):
         self.treated = treated
         self.predictions = predictions
         self.p_t = p_t      
         self.p_u = 1 - p_t
-
-
-cdef inline double log(double x) nogil:
-    return ln(x) / ln(2.0)
-
-# Sort n-element arrays pointed to by Xf and samples, simultaneously,
-# by the values in Xf. Algorithm: Introsort (Musser, SP&E, 1997).
-cdef inline void sort(double* Xf, SIZE_t* samples, SIZE_t n) nogil:
-    if n == 0:
-      return
-    cdef int maxd = 2 * <int>log(n)
-    introsort(Xf, samples, n, maxd)
-
-
-cdef inline void swap(double* Xf, SIZE_t* samples,
-        SIZE_t i, SIZE_t j) nogil:
-    # Helper for sort
-    Xf[i], Xf[j] = Xf[j], Xf[i]
-    samples[i], samples[j] = samples[j], samples[i]
-
-cdef inline double median3(double* Xf, SIZE_t n) nogil:
-    # Median of three pivot selection, after Bentley and McIlroy (1993).
-    # Engineering a sort function. SP&E. Requires 8/3 comparisons on average.
-    cdef double a = Xf[0], b = Xf[n / 2], c = Xf[n - 1]
-    if a < b:
-        if b < c:
-            return b
-        elif a < c:
-            return c
-        else:
-            return a
-    elif b < c:
-        if a < c:
-            return a
-        else:
-            return c
-    else:
-        return b
-
-# Introsort with median of 3 pivot selection and 3-way partition function
-# (robust to repeated elements, e.g. lots of zero features).
-cdef void introsort(double* Xf, SIZE_t *samples,
-                    SIZE_t n, int maxd) nogil:
-    cdef double pivot
-    cdef SIZE_t i, l, r
-
-    while n > 1:
-        if maxd <= 0:   # max depth limit exceeded ("gone quadratic")
-            heapsort(Xf, samples, n)
-            return
-        maxd -= 1
-
-        pivot = median3(Xf, n)
-
-        # Three-way partition.
-        i = l = 0
-        r = n
-        while i < r:
-            if Xf[i] < pivot:
-                swap(Xf, samples, i, l)
-                i += 1
-                l += 1
-            elif Xf[i] > pivot:
-                r -= 1
-                swap(Xf, samples, i, r)
-            else:
-                i += 1
-
-        introsort(Xf, samples, l, maxd)
-        Xf += r
-        samples += r
-        n -= r
-
-cdef inline void sift_down(double* Xf, SIZE_t* samples,
-                           SIZE_t start, SIZE_t end) nogil:
-    # Restore heap order in Xf[start:end] by moving the max element to start.
-    cdef SIZE_t child, maxind, root
-
-    root = start
-    while True:
-        child = root * 2 + 1
-
-        # find max of root, left child, right child
-        maxind = root
-        if child < end and Xf[maxind] < Xf[child]:
-            maxind = child
-        if child + 1 < end and Xf[maxind] < Xf[child + 1]:
-            maxind = child + 1
-
-        if maxind == root:
-            break
-        else:
-            swap(Xf, samples, root, maxind)
-            root = maxind
-
-cdef void heapsort(double* Xf, SIZE_t* samples, SIZE_t n) nogil:
-    cdef SIZE_t start, end
-
-    # heapify
-    start = (n - 2) / 2
-    end = n
-    while True:
-        sift_down(Xf, samples, start, end)
-        if start == 0:
-            break
-        start -= 1
-
-    # sort by shrinking the heap, putting the max element immediately after it
-    end = n - 1
-    while end > 0:
-        swap(Xf, samples, 0, end)
-        sift_down(Xf, samples, 0, end)
-        end = end - 1

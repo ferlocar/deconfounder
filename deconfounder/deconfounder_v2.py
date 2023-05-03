@@ -10,7 +10,15 @@ class DeconfounderTreeV2(DecisionTreeRegressor):
         Replaces the string stored in criterion by an instance of a class.
         """
         self.criterion = DeconfoundCriterionV2(1, X.shape[0])
+        # Sort sample by prediction values in descending order.
+        # After sorting, the sample index indicates the ranking by predicted values.
+        order = list(range(X.shape[0]))
+        order.sort(key=lambda i: -predictions[i])
+        predictions = np.array(predictions)[order]
+        X = X.loc[order]
+        y = y[order]
         treated = X.treated.values.astype('int32')
+        predictions = predictions.astype('float64')
         p_t = sum(treated)/len(treated)
         self.criterion.set_additional_parameters(treated, predictions, p_t)
         X_base = X.loc[:, X.columns != 'treated']

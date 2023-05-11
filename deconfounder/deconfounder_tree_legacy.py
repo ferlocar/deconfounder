@@ -1,9 +1,9 @@
 from sklearn.tree import DecisionTreeRegressor
-from mse_deconfound import DeconfoundCriterion
+from mse_deconfound_legacy import DeconfoundCriterion
 import pandas as pd
 import numpy as np
 
-class DeconfounderTree(DecisionTreeRegressor):
+class DeconfounderTreeLegacy(DecisionTreeRegressor):
 
     def fit(self, X, y, sample_weight=None, check_input=True):
         """

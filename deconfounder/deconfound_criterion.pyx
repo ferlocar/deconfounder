@@ -6,14 +6,13 @@ from libc.stdlib cimport calloc
 from libc.stdlib cimport free
 from libc.string cimport memcpy
 from libc.string cimport memset
-from libc.math cimport fabs
+from libc.math cimport tan, atan
 from libc.stdio cimport printf
 from libc.math cimport log as ln
 
 
 cdef int U_IX = 0
 cdef int T_IX = 1
-cdef double INFINITY = np.inf
 cdef double PRED_THRESHOLD = 1e-7
 
 
@@ -50,14 +49,14 @@ cdef class DeconfoundCriterion(Criterion):
         self.n_outputs = n_outputs
         self.n_samples = n_samples
         self.n_node_samples = 0
-        self.r_u_all_total = 0.0
+        self.r_u_all_node = 0.0
         self.r_u_all_left = 0.0
         self.r_u_all_right = 0.0
         self.weighted_n_node_samples = 0.0
         self.weighted_n_left = 0.0
         self.weighted_n_right = 0.0
 
-        self.mask_total = np.zeros(n_samples, dtype=np.int32)
+        self.mask_node = np.zeros(n_samples, dtype=np.int32)
         self.mask_left = np.zeros(n_samples, dtype=np.int32)
         self.mask_right = np.zeros(n_samples, dtype=np.int32)
 
@@ -68,6 +67,7 @@ cdef class DeconfoundCriterion(Criterion):
         d = {}
         d['treated'] = np.asarray(self.treated)
         d['predictions'] = np.asarray(self.predictions)
+        d['cost'] = np.asarray(self.cost)
         d['p_t'] = self.p_t
         d['p_u'] = self.p_u
         return d
@@ -75,6 +75,7 @@ cdef class DeconfoundCriterion(Criterion):
     def __setstate__(self, d):
         self.treated = np.asarray(d['treated'])
         self.predictions = np.asarray(d['predictions'])
+        self.cost = np.asarray(d['cost'])
         self.p_t = d['p_t']
         self.p_u = d['p_u']
 
@@ -92,8 +93,7 @@ cdef class DeconfoundCriterion(Criterion):
         self.n_node_samples = end - start
         self.weighted_n_samples = weighted_n_samples
         self.weighted_n_node_samples = 0.
-        self.largest_y = fabs(y[0, 0])
-        self.r_u_all_total = 0.0
+        self.r_u_all_node = 0.0
 
         cdef SIZE_t i
         cdef SIZE_t p
@@ -104,7 +104,7 @@ cdef class DeconfoundCriterion(Criterion):
         cdef int is_treated
 
         for i in range(self.n_samples):
-            self.mask_total[i] = 0
+            self.mask_node[i] = 0
 
         for p in range(start, end):
             i = samples[p]
@@ -118,13 +118,10 @@ cdef class DeconfoundCriterion(Criterion):
                 w_y_ik = w * y_ik
 
                 if not is_treated:
-                    self.r_u_all_total += w_y_ik
-
-                if self.largest_y < fabs(y_ik):
-                    self.largest_y = fabs(y_ik)
+                    self.r_u_all_node += w_y_ik
 
             self.weighted_n_node_samples += w
-            self.mask_total[i] = 1
+            self.mask_node[i] = 1
         
         # Reset to pos=start
         self.reset()
@@ -136,28 +133,28 @@ cdef class DeconfoundCriterion(Criterion):
         cdef SIZE_t i
 
         self.r_u_all_left = 0.0
-        self.r_u_all_right = self.r_u_all_total
+        self.r_u_all_right = self.r_u_all_node
         self.weighted_n_left = 0.0
         self.weighted_n_right = self.weighted_n_node_samples
         self.pos = self.start
         
         for i in range(self.n_samples):
             self.mask_left[i] = 0
-            self.mask_right[i] = self.mask_total[i]
+            self.mask_right[i] = self.mask_node[i]
         return 0
 
     cdef int reverse_reset(self) nogil except -1:
         """Reset the criterion at pos=end."""
         cdef SIZE_t i
 
-        self.r_u_all_left = self.r_u_all_total
+        self.r_u_all_left = self.r_u_all_node
         self.r_u_all_right = 0.0
         self.weighted_n_left = self.weighted_n_node_samples
         self.weighted_n_right = 0.0
         self.pos = self.end
 
         for i in range(self.n_samples):
-            self.mask_left[i] = self.mask_total[i]
+            self.mask_left[i] = self.mask_node[i]
             self.mask_right[i] = 0
         return 0
 
@@ -226,7 +223,7 @@ cdef class DeconfoundCriterion(Criterion):
                 self.mask_left[i] = 0
                 self.mask_right[i] = 1
 
-        self.r_u_all_right = self.r_u_all_total - self.r_u_all_left
+        self.r_u_all_right = self.r_u_all_node - self.r_u_all_left
         self.weighted_n_right = (self.weighted_n_node_samples - self.weighted_n_left)
 
         self.pos = new_pos
@@ -237,39 +234,45 @@ cdef class DeconfoundCriterion(Criterion):
         
         cdef BoundaryRecord curr, best
         cdef double w = 1.0
-        cdef double w_y_i0
+        cdef double y_i
+        cdef double cost_i
         cdef SIZE_t i
+        cdef SIZE_t node_start = 0      # the sample id with the highest prediction in the node
 
-        curr.bias = INFINITY
-        curr.r_u = r_u_all
-        curr.r_t = 0.0
-        curr.weighted_r = r_u_all / self.p_u
+        while node_start < self.n_samples:
+            if mask[node_start]:
+                break
+            node_start += 1
+            
+        curr.threshold = self.predictions[node_start] + PRED_THRESHOLD 
+        curr.reward = r_u_all / self.p_u
         best = curr
 
-        for i in range(self.n_samples):
-            if not mask[i]:     # the sample not in the node
+        for i in range(node_start, self.n_samples): 
+            # Skip observations not in the node
+            if not mask[i]: 
                 continue
-
-            # check if the current sample has lower prediction value than the previous one, 
-            # if do, calculate the reward for this bias (not include the current sample)
-            if (curr.bias > self.predictions[i] + PRED_THRESHOLD):      
-                curr.weighted_r = curr.r_t / self.p_t + curr.r_u / self.p_u
-                if curr.weighted_r > best.weighted_r:
+                
+            # Calculate total reward when we treat everyone with a prediction greater than predictions[i].
+            if (curr.threshold > self.predictions[i]):      
+                if curr.reward > best.reward:
                     best = curr
+                # Update bias so that observation i is treated
+                curr.threshold = self.predictions[i] - PRED_THRESHOLD
+
+            # Update reward when observation i is treated
 
             if self.sample_weight is not None:
                 w = self.sample_weight[i]
-            w_y_i0 = w * self.y[i, 0]
+            y_i = self.y[i, 0] 
+            cost_i = self.cost[i]
 
             if self.treated[i]:
-                curr.r_t += w_y_i0
+                curr.reward += w * (y_i - cost_i) / self.p_t
             else:
-                curr.r_u -= w_y_i0
+                curr.reward -= w * y_i / self.p_u
 
-            curr.bias = self.predictions[i]
-
-        curr.weighted_r = curr.r_t / self.p_t + curr.r_u / self.p_u
-        if curr.weighted_r > best.weighted_r:
+        if curr.reward > best.reward:
             best = curr
 
         return best
@@ -283,11 +286,12 @@ cdef class DeconfoundCriterion(Criterion):
         boundary = self.decision_boundary(r_u_all, mask)
 
         # impurity
-        impurity = - boundary.weighted_r / max(1, weighted_n_samples)
+        impurity = - boundary.reward / max(1, weighted_n_samples)
 
         # The SKLEARN tree requires impurity to be greater than 0.
         # So, we sum this constant to make sure it does.
-        impurity += self.largest_y / min(self.p_u, self.p_t)
+
+        impurity = compute_atan(impurity)
 
         return impurity
 
@@ -296,11 +300,9 @@ cdef class DeconfoundCriterion(Criterion):
            samples[start:end]."""
 
         cdef double impurity = 0
-        cdef double impurity_k
 
         for k in range(self.n_outputs):
-            impurity_k = self.get_impurity(self.r_u_all_total, self.mask_total, self.weighted_n_node_samples)
-            impurity += impurity_k
+            impurity += self.get_impurity(self.r_u_all_node, self.mask_node, self.weighted_n_node_samples)
 
         return impurity / self.n_outputs
 
@@ -320,7 +322,6 @@ cdef class DeconfoundCriterion(Criterion):
         impurity_left[0] /= self.n_outputs
         impurity_right[0] /= self.n_outputs
 
-
     cdef void node_value(self, double * dest) nogil:
         """Compute the node value of samples[start:end] into dest."""
 
@@ -328,11 +329,38 @@ cdef class DeconfoundCriterion(Criterion):
         cdef BoundaryRecord boundary
 
         for k in range(self.n_outputs):
-            boundary = self.decision_boundary(self.r_u_all_total, self.mask_total)
-            dest[k] = boundary.bias
+            boundary = self.decision_boundary(self.r_u_all_node, self.mask_node)
+            dest[k] = boundary.threshold
 
-    def set_additional_parameters(self, int[:] treated, double[:] predictions, double p_t):
+    cdef double proxy_impurity_improvement(self) nogil:
+
+        cdef double impurity_left
+        cdef double impurity_right
+        self.children_impurity(&impurity_left, &impurity_right)
+
+        return (- self.weighted_n_right * compute_tan(impurity_right)
+                - self.weighted_n_left * compute_tan(impurity_left))
+
+    cdef double impurity_improvement(self, double impurity_parent,
+                                     double impurity_left,
+                                     double impurity_right) nogil:
+
+        return ((self.weighted_n_node_samples / self.weighted_n_samples) *
+                (compute_tan(impurity_parent) - (self.weighted_n_right /
+                                    self.weighted_n_node_samples * compute_tan(impurity_right))
+                                 - (self.weighted_n_left /
+                                    self.weighted_n_node_samples * compute_tan(impurity_left))))
+
+
+    def set_sample_parameters(self, int[:] treated, double[:] predictions, double[:] cost, double p_t):
         self.treated = treated
         self.predictions = predictions
+        self.cost = cost
         self.p_t = p_t      
         self.p_u = 1 - p_t
+
+cdef inline double compute_atan(double x) nogil:
+    return atan(x)+2
+
+cdef inline double compute_tan(double x) nogil:
+    return tan(x-2)

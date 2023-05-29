@@ -5,22 +5,32 @@ import numpy as np
 
 class DeconfounderTree(DecisionTreeRegressor):
 
-    def fit(self, X, y, predictions, sample_weight=None, check_input=True):
+    def fit(self, X, y, predictions, cost=0, sample_weight=None, check_input=True):
         """
         Replaces the string stored in criterion by an instance of a class.
         """
-        self.criterion = DeconfoundCriterion(1, X.shape[0])
+        nsamples = X.shape[0]
+        self.criterion = DeconfoundCriterion(1, nsamples)
+
         # Sort sample by prediction values in descending order.
-        # After sorting, the sample index indicates the ranking by predicted values.
-        order = list(range(X.shape[0]))
+        # After sorting, the sample index indicates the ranking by prediction.
+        order = list(range(nsamples))
         order.sort(key=lambda i: -predictions[i])
         predictions = np.array(predictions)[order]
         X = X.iloc[order]   
         y = y.iloc[order]
         treated = X.treated.values.astype('int32')
         predictions = predictions.astype('float64')
+
+        if isinstance(cost, (int, float)):
+            cost = np.ones(nsamples, dtype=np.float64) * cost
+        elif isinstance(cost, (np.ndarray)):
+            cost = np.array(cost, dtype=np.float64)
+        else:
+            cost = np.zeros(nsamples, dtype=np.float64)
+
         p_t = sum(treated)/len(treated)
-        self.criterion.set_additional_parameters(treated, predictions, p_t)
+        self.criterion.set_sample_parameters(treated, predictions, cost, p_t)
         X_base = X.loc[:, X.columns != 'treated']
         DecisionTreeRegressor.fit(self, X_base, y, sample_weight=sample_weight, check_input=check_input)
         return self
@@ -40,7 +50,7 @@ class DeconfounderTree(DecisionTreeRegressor):
         df['pred'] = np.array(predictions)
         p_t = sum(df.treated)/len(df)
         df['p'] = df.apply(lambda row: p_t if row.treated==1 else 1-p_t, axis=1)
-        df['decision'] = df.apply(lambda row: 1 if (row.pred-row.bias >= 0) else 0, axis=1)
+        df['decision'] = df.apply(lambda row: 1 if (row.pred-row.bias > 0) else 0, axis=1)
         df['reward'] = df.apply(lambda row: row.y/row.p if (row.decision==row.treated) else 0,axis=1)
         score_ = - df.reward.mean()
         return score_

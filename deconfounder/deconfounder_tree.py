@@ -1,43 +1,39 @@
 from sklearn.tree import DecisionTreeRegressor
-from deconfound_criterion import DeconfoundCriterion
+from deconfound_criterion_swift import DeconfoundCriterion
 import pandas as pd
 import numpy as np
 
 class DeconfounderTree(DecisionTreeRegressor):
 
-    def fit(self, X, y, predictions, cost=0, sample_weight=None, check_input=True):
+    def fit(self, X, y, treatment, prediction, cost=0, sample_weight=None, check_input=True):
         """
         Replaces the string stored in criterion by an instance of a class.
         """
         nsamples = X.shape[0]
-        self.criterion = DeconfoundCriterion(1, nsamples)
-
-        # Sort sample by prediction values in descending order.
-        # After sorting, the sample index indicates the ranking by prediction.
-        order = list(range(nsamples))
-        order.sort(key=lambda i: -predictions[i])
-        predictions = np.array(predictions)[order]
-        X = X.iloc[order]   
-        y = y.iloc[order]
-        treated = X.treated.values.astype('int32')
-        predictions = predictions.astype('float64')
+        X, y, treatment = np.array(X), np.array(y), np.array(treatment, dtype='int32')
+        prediction = np.array(prediction, dtype=np.float64)
 
         if isinstance(cost, (int, float)):
             cost = np.ones(nsamples, dtype=np.float64) * cost
-        elif isinstance(cost, (np.ndarray)):
+        elif isinstance(cost, (list, np.ndarray)):
             cost = np.array(cost, dtype=np.float64)
         else:
-            cost = np.zeros(nsamples, dtype=np.float64)
+            raise ValueError(f'cost should be a number or a list or an array')
+        
+        # Sort sample by prediction values in descending order.
+        # After sorting, the sample index indicates the ranking by prediction.
+        order = np.argsort(prediction, kind="mergesort")[::-1]
+        X, y, treatment, prediction, cost = X[order], y[order], treatment[order], prediction[order], cost[order]
 
-        p_t = sum(treated)/len(treated)
-        self.criterion.set_sample_parameters(treated, predictions, cost, p_t)
-        X_base = X.loc[:, X.columns != 'treated']
-        DecisionTreeRegressor.fit(self, X_base, y, sample_weight=sample_weight, check_input=check_input)
+        p_t = np.sum(treatment)/nsamples
+        
+        self.criterion = DeconfoundCriterion(1, nsamples)
+        self.criterion.set_sample_parameters(treatment, prediction, cost, p_t)
+        DecisionTreeRegressor.fit(self, X, y, sample_weight=sample_weight, check_input=check_input)
         return self
 
     def predict(self, X, check_input=True):
-        X_base = X.loc[:, X.columns != 'treated']
-        return DecisionTreeRegressor.predict(self, X_base, check_input=check_input)
+        return DecisionTreeRegressor.predict(self, X, check_input=check_input)
 
     def score(self, X, y, predictions, sample_weight=None):
         # This method does not support sample_weight

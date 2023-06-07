@@ -1,18 +1,20 @@
 from sklearn.tree._criterion cimport Criterion
-from sklearn.tree._criterion cimport SIZE_t
+from sklearn.tree._criterion cimport SIZE_t, DTYPE_t, DOUBLE_t
 import numpy as np
 
 from libc.stdlib cimport calloc
 from libc.stdlib cimport free
 from libc.string cimport memcpy
 from libc.string cimport memset
-from libc.math cimport tan, atan
+from libc.math cimport atan, tan
 from libc.stdio cimport printf
 from libc.math cimport log as ln
 
 
 cdef int U_IX = 0
 cdef int T_IX = 1
+cdef int L_IX = 1
+cdef int R_IX = 0
 cdef double PRED_THRESHOLD = 1e-7
 
 
@@ -49,16 +51,16 @@ cdef class DeconfoundCriterion(Criterion):
         self.n_outputs = n_outputs
         self.n_samples = n_samples
         self.n_node_samples = 0
-        self.r_u_all_node = 0.0
-        self.r_u_all_left = 0.0
-        self.r_u_all_right = 0.0
         self.weighted_n_node_samples = 0.0
         self.weighted_n_left = 0.0
         self.weighted_n_right = 0.0
 
-        self.mask_node = np.zeros(n_samples, dtype=np.int32)
-        self.mask_left = np.zeros(n_samples, dtype=np.int32)
-        self.mask_right = np.zeros(n_samples, dtype=np.int32)
+        self.r_u_all_node = 0.0
+        self.r_u_all_children[L_IX] = 0.0
+        self.r_u_all_children[R_IX] = 0.0
+
+        self.sorted_samples = np.empty(n_samples, dtype=np.int64)
+        self.children_mask = np.zeros(n_samples, dtype=np.int32)
 
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
@@ -103,8 +105,7 @@ cdef class DeconfoundCriterion(Criterion):
         cdef DOUBLE_t w = 1.0
         cdef int is_treated
 
-        for i in range(self.n_samples):
-            self.mask_node[i] = 0
+        cdef SIZE_t[::1] sorted_samples = self.sorted_samples
 
         for p in range(start, end):
             i = samples[p]
@@ -121,8 +122,9 @@ cdef class DeconfoundCriterion(Criterion):
                     self.r_u_all_node += w_y_ik
 
             self.weighted_n_node_samples += w
-            self.mask_node[i] = 1
-        
+
+            insert_sorted(&sorted_samples[start], i, p-start)
+            
         # Reset to pos=start
         self.reset()
 
@@ -130,32 +132,34 @@ cdef class DeconfoundCriterion(Criterion):
 
     cdef int reset(self) nogil except -1:
         """Reset the criterion at pos=start."""
-        cdef SIZE_t i
+        cdef SIZE_t p, i
 
-        self.r_u_all_left = 0.0
-        self.r_u_all_right = self.r_u_all_node
+        self.r_u_all_children[L_IX] = 0.0
+        self.r_u_all_children[R_IX] = self.r_u_all_node
         self.weighted_n_left = 0.0
         self.weighted_n_right = self.weighted_n_node_samples
         self.pos = self.start
         
-        for i in range(self.n_samples):
-            self.mask_left[i] = 0
-            self.mask_right[i] = self.mask_node[i]
+        for p in range(self.start, self.end):
+            i = self.samples[p]
+            self.children_mask[i] = R_IX
+
         return 0
 
     cdef int reverse_reset(self) nogil except -1:
         """Reset the criterion at pos=end."""
         cdef SIZE_t i
 
-        self.r_u_all_left = self.r_u_all_node
-        self.r_u_all_right = 0.0
+        self.r_u_all_children[L_IX] = self.r_u_all_node
+        self.r_u_all_children[R_IX] = 0.0
         self.weighted_n_left = self.weighted_n_node_samples
         self.weighted_n_right = 0.0
         self.pos = self.end
 
-        for i in range(self.n_samples):
-            self.mask_left[i] = self.mask_node[i]
-            self.mask_right[i] = 0
+        for p in range(self.start, self.end):
+            i = self.samples[p]
+            self.children_mask[i] = L_IX
+
         return 0
 
     cdef int update(self, SIZE_t new_pos) nogil except -1:
@@ -195,12 +199,11 @@ cdef class DeconfoundCriterion(Criterion):
                     y_ik = self.y[i, k]
                     w_y_ik = w * y_ik
 
-                    if not is_treated:
-                        self.r_u_all_left += w_y_ik
+                if not is_treated:
+                    self.r_u_all_children[L_IX] += w_y_ik
 
                 self.weighted_n_left += w
-                self.mask_left[i] = 1
-                self.mask_right[i] = 0
+                self.children_mask[i] = L_IX
 
         else:
             self.reverse_reset()
@@ -216,59 +219,55 @@ cdef class DeconfoundCriterion(Criterion):
                     y_ik = self.y[i, k]
                     w_y_ik = w * y_ik
 
-                    if not is_treated:
-                        self.r_u_all_left -= w_y_ik
+                if not is_treated:
+                    self.r_u_all_children[L_IX] -= w_y_ik
 
                 self.weighted_n_left -= w
-                self.mask_left[i] = 0
-                self.mask_right[i] = 1
+                self.children_mask[i] = R_IX
 
-        self.r_u_all_right = self.r_u_all_node - self.r_u_all_left
+        self.r_u_all_children[R_IX] = self.r_u_all_node - self.r_u_all_children[L_IX]
         self.weighted_n_right = (self.weighted_n_node_samples - self.weighted_n_left)
 
         self.pos = new_pos
 
         return 0
 
-    cdef BoundaryRecord decision_boundary(self, double r_u_all, int[:] mask) nogil:
+    cdef BoundaryRecord node_decision_boundary(self) nogil:
         
         cdef BoundaryRecord curr, best
+
+        cdef double[:] predictions = self.predictions
         cdef double w = 1.0
         cdef double y_i
         cdef double cost_i
-        cdef SIZE_t i
-        cdef SIZE_t node_start = 0      # the sample id with the highest prediction in the node
 
-        while node_start < self.n_samples:
-            if mask[node_start]:
-                break
-            node_start += 1
-            
-        curr.threshold = self.predictions[node_start] + PRED_THRESHOLD 
-        curr.reward = r_u_all / self.p_u
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+        cdef SIZE_t p, i
+
+        i = self.sorted_samples[start]
+        curr.threshold = predictions[i] + PRED_THRESHOLD
+        curr.reward = self.r_u_all_node / self.p_u
         best = curr
 
-        for i in range(node_start, self.n_samples): 
-            # Skip observations not in the node
-            if not mask[i]: 
-                continue
-                
+        for p in range(start, end):
+            i = self.sorted_samples[p]
+
             # Calculate total reward when we treat everyone with a prediction greater than predictions[i].
-            if (curr.threshold > self.predictions[i]):      
+            if (curr.threshold > predictions[i]):      
                 if curr.reward > best.reward:
                     best = curr
                 # Update bias so that observation i is treated
-                curr.threshold = self.predictions[i] - PRED_THRESHOLD
+                curr.threshold = predictions[i] - PRED_THRESHOLD
 
             # Update reward when observation i is treated
-
             if self.sample_weight is not None:
                 w = self.sample_weight[i]
             y_i = self.y[i, 0] 
             cost_i = self.cost[i]
 
             if self.treated[i]:
-                curr.reward += w * (y_i - cost_i) / self.p_t
+                curr.reward += w * (y_i - cost_i) / self.p_t   # benefit - cost
             else:
                 curr.reward -= w * y_i / self.p_u
 
@@ -277,23 +276,53 @@ cdef class DeconfoundCriterion(Criterion):
 
         return best
 
-    cdef double get_impurity(self, double r_u_all, int[:] mask, double weighted_n_samples) nogil:
+    cdef BoundaryRecord* children_decision_boundary(self) nogil:
+        
+        cdef BoundaryRecord[2] curr, best
 
-        cdef double impurity = 0.
-        cdef BoundaryRecord boundary
+        cdef double[:] predictions = self.predictions
+        cdef double w = 1.0
+        cdef double y_i
+        cdef double cost_i
 
-        # decision boundary
-        boundary = self.decision_boundary(r_u_all, mask)
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+        cdef int is_left
+        cdef SIZE_t p, i
 
-        # impurity
-        impurity = - boundary.reward / max(1, weighted_n_samples)
+        i = self.sorted_samples[start]
+        for is_left in range(2):
+            curr[is_left].threshold = predictions[i] + PRED_THRESHOLD   # largest prediction in the parent node
+            curr[is_left].reward = self.r_u_all_children[is_left] / self.p_u
+            best[is_left] = curr[is_left]
 
-        # The SKLEARN tree requires impurity to be greater than 0.
-        # So, we sum this constant to make sure it does.
+        for p in range(start, end):
+            i = self.sorted_samples[p]
+            is_left = self.children_mask[i]
 
-        impurity = compute_atan(impurity)
+            # Calculate total reward when we treat everyone with a prediction greater than predictions[i].
+            if (curr[is_left].threshold > predictions[i]):      
+                if curr[is_left].reward > best[is_left].reward:
+                    best[is_left] = curr[is_left]
+                # Update bias so that observation i is treated
+                curr[is_left].threshold = predictions[i] - PRED_THRESHOLD
 
-        return impurity
+            # Update reward when observation i is treated
+            if self.sample_weight is not None:
+                w = self.sample_weight[i]
+            y_i = self.y[i, 0]
+            cost_i = self.cost[i]
+
+            if self.treated[i]:
+                curr[is_left].reward += w * (y_i - cost_i) / self.p_t     # benefit - cost
+            else:
+                curr[is_left].reward -= w * y_i / self.p_u
+
+        for is_left in range(2):
+            if curr[is_left].reward > best[is_left].reward:
+                best[is_left] = curr[is_left]
+
+        return best
 
     cdef double node_impurity(self) nogil:
         """Evaluate the impurity of the current node, i.e. the impurity of
@@ -302,9 +331,12 @@ cdef class DeconfoundCriterion(Criterion):
         cdef double impurity = 0
 
         for k in range(self.n_outputs):
-            impurity += self.get_impurity(self.r_u_all_node, self.mask_node, self.weighted_n_node_samples)
+            boundary = self.node_decision_boundary()
+            impurity -= boundary.reward / max(1, self.weighted_n_node_samples)
 
-        return impurity / self.n_outputs
+        impurity /= self.n_outputs
+
+        return calc_atan(impurity)
 
     cdef void children_impurity(self, double* impurity_left,
                                 double* impurity_right) nogil:
@@ -316,11 +348,15 @@ cdef class DeconfoundCriterion(Criterion):
         impurity_right[0] = 0
 
         for k in range(self.n_outputs):
-            impurity_left[0] += self.get_impurity(self.r_u_all_left, self.mask_left, self.weighted_n_left)
-            impurity_right[0] += self.get_impurity(self.r_u_all_right, self.mask_right, self.weighted_n_right)
+            children_boundary = self.children_decision_boundary()
+            impurity_left[0] -= children_boundary[L_IX].reward / max(1, self.weighted_n_left)
+            impurity_right[0] -= children_boundary[R_IX].reward / max(1, self.weighted_n_right)
 
         impurity_left[0] /= self.n_outputs
         impurity_right[0] /= self.n_outputs
+        impurity_left[0] = calc_atan(impurity_left[0])
+        impurity_right[0] = calc_atan(impurity_right[0])
+
 
     cdef void node_value(self, double * dest) nogil:
         """Compute the node value of samples[start:end] into dest."""
@@ -329,7 +365,7 @@ cdef class DeconfoundCriterion(Criterion):
         cdef BoundaryRecord boundary
 
         for k in range(self.n_outputs):
-            boundary = self.decision_boundary(self.r_u_all_node, self.mask_node)
+            boundary = self.node_decision_boundary()
             dest[k] = boundary.threshold
 
     cdef double proxy_impurity_improvement(self) nogil:
@@ -338,19 +374,18 @@ cdef class DeconfoundCriterion(Criterion):
         cdef double impurity_right
         self.children_impurity(&impurity_left, &impurity_right)
 
-        return (- self.weighted_n_right * compute_tan(impurity_right)
-                - self.weighted_n_left * compute_tan(impurity_left))
+        return (- self.weighted_n_right * calc_tan(impurity_right)
+                - self.weighted_n_left * calc_tan(impurity_left))
 
     cdef double impurity_improvement(self, double impurity_parent,
                                      double impurity_left,
                                      double impurity_right) nogil:
 
         return ((self.weighted_n_node_samples / self.weighted_n_samples) *
-                (compute_tan(impurity_parent) - (self.weighted_n_right /
-                                    self.weighted_n_node_samples * compute_tan(impurity_right))
-                                 - (self.weighted_n_left /
-                                    self.weighted_n_node_samples * compute_tan(impurity_left))))
-
+                (impurity_parent - calc_atan(
+                    (self.weighted_n_right / self.weighted_n_node_samples * calc_tan(impurity_right))
+                    + (self.weighted_n_left / self.weighted_n_node_samples * calc_tan(impurity_left)))
+                ))
 
     def set_sample_parameters(self, int[:] treated, double[:] predictions, double[:] cost, double p_t):
         self.treated = treated
@@ -359,8 +394,40 @@ cdef class DeconfoundCriterion(Criterion):
         self.p_t = p_t      
         self.p_u = 1 - p_t
 
-cdef inline double compute_atan(double x) nogil:
+cdef inline double calc_atan(double x) nogil:
     return atan(x)+2
 
-cdef inline double compute_tan(double x) nogil:
+cdef inline double calc_tan(double x) nogil:
     return tan(x-2)
+
+# Binary search for the position of x in an array of length n
+cdef inline SIZE_t bisect_left(SIZE_t* a, SIZE_t x, SIZE_t lo, SIZE_t hi) nogil:
+
+    cdef SIZE_t mid
+
+    if (lo < 0):
+        printf("lo must be non-negative\n")
+        return -1
+
+    while (lo < hi):
+        mid = (lo + hi) / 2
+        if (a[mid] < x):
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+# Insert x into an array of length n
+cdef inline void insert_sorted(SIZE_t* a, SIZE_t x, SIZE_t n) nogil:
+
+    cdef SIZE_t j, k
+    k = bisect_left(a, x, 0, n)
+
+    j = n-1
+    while j >= k:
+        a[j+1] = a[j]
+        j -= 1
+    a[k] = x
+
+
+

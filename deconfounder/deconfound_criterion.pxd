@@ -1,6 +1,6 @@
 cimport cython
 from sklearn.tree._criterion cimport Criterion
-from sklearn.tree._criterion cimport SIZE_t, DOUBLE_t
+from sklearn.tree._criterion cimport SIZE_t, DTYPE_t
 
 cdef struct BoundaryRecord:
     double threshold
@@ -8,12 +8,10 @@ cdef struct BoundaryRecord:
 
 cdef class DeconfoundCriterion(Criterion):
     cdef double r_u_all_node   # reward if we untreat all individuals in the node
-    cdef double r_u_all_left    # reward if we untreat all individuals in the left node
-    cdef double r_u_all_right   # reward if we untreat all individuals in the right node
+    cdef double[2] r_u_all_children    # reward if we untreat all individuals in th children node
 
-    cdef int[:] mask_node  # indicate which samples are in the node
-    cdef int[:] mask_left   # indicate which samples are in the left node
-    cdef int[:] mask_right  # indicate which samples are in the right node
+    cdef SIZE_t[::1] sorted_samples   # Splitted by node in which samples are sorted by predictions
+    cdef int[:] children_mask  # Indicate if the observation is left or right
 
     cdef int[:] treated  # Defines which observations were treated
     cdef double[:] predictions # Predicted effects by the observational model
@@ -21,7 +19,6 @@ cdef class DeconfoundCriterion(Criterion):
     cdef double p_t    # fraction of treated individuals in the entire data
     cdef double p_u    # fraction of untreated individual in the entire data
 
-    # Replicate variables for the TREATED
+    cdef BoundaryRecord node_decision_boundary(self) nogil
+    cdef BoundaryRecord* children_decision_boundary(self) nogil
 
-    cdef BoundaryRecord decision_boundary(self, double r_t_all, int[:] mask) nogil
-    cdef double get_impurity(self, double r_u_all, int[:] mask, double weighted_n_samples) nogil

@@ -1,5 +1,5 @@
 from sklearn.tree import DecisionTreeRegressor
-from deconfound_criterion_swift import DeconfoundCriterion
+from deconfound_criterion import DeconfoundCriterion
 import pandas as pd
 import numpy as np
 

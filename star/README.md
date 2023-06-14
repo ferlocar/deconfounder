@@ -1,0 +1,2 @@
+* star_examples.ipynb - You can run it to get the experimental results of the deconfounder tree on STAR data.
+* star_process.py - This file is used to convert each category string into number, based on the categorical order in star_variables.json. Then you can get the data file used in star_examples.ipynb .

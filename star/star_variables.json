@@ -1,0 +1,16 @@
+{
+    "gender": ["MALE", "FEMALE"],
+    "race": ["WHITE", "BLACK", "ASIAN", "HISPANIC", "NATIVE AMERICAN", "OTHER"],
+    "birthmonth": ["JANUARY", "FEBRUARY", "MARCH", "ARPIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"],
+    "gkfreelunch": ["FREE LUNCH", "NON-FREE LUNCH"],
+    "g1classtype": ["SMALL CLASS", "REGULAR CLASS", "REGULAR + AIDE CLASS"],
+    "g1surban": ["INNER CITY", "SUBURBAN", "RURAL", "URBAN"],
+    "g1tgen": ["MALE", "FEMALE"],
+    "g1trace": ["WHITE", "BLACK", "ASIAN", "HISPANIC", "NATIVE AMERICAN", "OTHER"],
+    "g1thighdegree": ["ASSOCIATES", "BACHELORS", "MASTERS", "MASTERS +", "SPECIALIST", "DOCTORAL"],
+    "g1tcareer": ["CHOSE NOT TO BE ON CAREER LADDER", "APPRENTICE", "PROBATION", "LADDER LEVEL 1", "LADDER LEVEL 2", "LADDER LEVEL 3", "PENDING"],
+    "g1freelunch": ["FREE LUNCH", "NON-FREE LUNCH"],
+    "g1promote": ["YES, PROMOTION RECOMMENDED", "NO, PROMOTION NOT RECOMMENDED"],
+    "g1speced": ["YES", "NO"],
+    "g1specin": ["YES", "NO"]
+}

@@ -1,7 +1,8 @@
 from sklearn.ensemble import RandomForestRegressor
-from .mse_causal import CausalCriterion
+from mse_causal import CausalCriterion
 import pandas as pd
 import numpy as np
+
 
 class CausalForest(RandomForestRegressor):
 

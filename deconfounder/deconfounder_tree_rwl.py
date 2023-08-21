@@ -23,11 +23,6 @@ class DeconfounderTree(DecisionTreeRegressor):
         self.criterion.set_sample_parameters(treatment, scores, cost)
         DecisionTreeRegressor.fit(self, X, y_true, sample_weight=sample_weight, check_input=check_input)
 
-        # node_ids = self.apply(X)
-        # avg_yt = pd.Series(y_true[treatment==1]).groupby(node_ids[treatment==1]).mean()
-        # avg_yu = pd.Series(y_true[treatment==0]).groupby(node_ids[treatment==0]).mean()
-        # self.node_shift = (avg_yt + avg_yu) / 2
-
         return self
 
     def predict(self, X, check_input=True):
@@ -38,14 +33,9 @@ class DeconfounderTree(DecisionTreeRegressor):
         X, y = np.array(X), np.array(y)
         treatment, y_true, scores, cost = y[:, 0], y[:, 1], y[:, 2], y[:, 3]
 
-        node_ids = self.apply(X)
-        p_t = pd.Series(treatment).groupby(node_ids).mean()[node_ids].values
-        avg_yt = pd.Series(y_true[treatment==1]).groupby(node_ids[treatment==1]).mean()
-        avg_yu = pd.Series(y_true[treatment==0]).groupby(node_ids[treatment==0]).mean()
-        shift = ((avg_yt + avg_yu) / 2).fillna(0)[node_ids].values
-        # shift = self.node_shift[node_ids].values
-
-        corrected_scores = scores - np.atleast_1d(self.tree_.value.squeeze())[node_ids]
+        p_t = np.mean(treatment)
+        shift = (np.mean(y_true[treatment==1]) + np.mean(y_true[treatment==0])) / 2
+        corrected_scores = scores - self.predict(X)
         decision = (corrected_scores > 0)
         reward = (y_true - shift) / (treatment * p_t + (1 - treatment) * (1 - p_t))
         score_ = np.mean((decision == treatment) * reward)

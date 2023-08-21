@@ -30,9 +30,8 @@ class DeconfounderTree(DecisionTreeRegressor):
         X, y = np.array(X), np.array(y)
         treatment, y_true, scores, cost = y[:, 0], y[:, 1], y[:, 2], y[:, 3]
         
-        node_ids = self.apply(X)
-        p_t = pd.Series(treatment).groupby(node_ids).mean()[node_ids].values
-        corrected_scores = scores - np.atleast_1d(self.tree_.value.squeeze())[node_ids]
+        p_t = np.mean(treatment)
+        corrected_scores = scores - self.predict(X)
         decision = (corrected_scores > 0)
         p = treatment * p_t + (1-treatment) * (1 - p_t)
         score_ = np.sum((decision == treatment) * y_true / p) / np.sum((decision == treatment) / p)

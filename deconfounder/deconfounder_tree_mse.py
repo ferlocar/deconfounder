@@ -24,12 +24,11 @@ class DeconfounderTree(DecisionTreeRegressor):
         # Greater is better
         X, y = np.array(X), np.array(y)
         treatment, y_true, scores, cost = y[:, 0], y[:, 1], y[:, 2], y[:, 3]
-        
-        node_ids = self.apply(X)
-        corrected_scores = scores - np.atleast_1d(self.tree_.value.squeeze())[node_ids]
-        avg_yt = pd.Series(y_true[treatment==1]).groupby(node_ids[treatment==1]).mean()
-        avg_yu = pd.Series(y_true[treatment==0]).groupby(node_ids[treatment==0]).mean()
-        eff_test = (avg_yt - avg_yu).fillna(0)[node_ids].values
 
-        mse = -2 * (corrected_scores * eff_test).mean() + np.square(corrected_scores).mean()
+        p_t = np.mean(treatment)
+        y_star = treatment * y_true / p_t - (1 - treatment) * y_true / (1 - p_t)
+        corrected_scores = scores - self.predict(X)
+
+        # mse = np.mean((corrected_scores - y_star)**2)
+        mse = -2 * (corrected_scores * y_star).mean() + np.square(corrected_scores).mean()
         return -mse

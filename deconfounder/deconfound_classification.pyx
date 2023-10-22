@@ -60,9 +60,9 @@ cdef class DeconfoundClassification(Criterion):
         self.children_mask = np.zeros(n_samples, dtype=np.int32)
 
         for is_treated in range(2):
-            self.weighted_n_node_arr[is_treated] = 0.0
-            self.weighted_n_left_arr[is_treated] = 0.0
-            self.weighted_n_right_arr[is_treated] = 0.0
+            self.weighted_n_node_arr[is_treated] = .0
+            self.weighted_n_left_arr[is_treated] = .0
+            self.weighted_n_right_arr[is_treated] = .0
             self.sum_node_arr[is_treated] = .0
             self.sum_left_arr[is_treated] = .0
             self.sum_right_arr[is_treated] = .0
@@ -108,8 +108,8 @@ cdef class DeconfoundClassification(Criterion):
         cdef SIZE_t[::1] sorted_samples = self.sorted_samples
 
         for is_treated in range(2):
-            self.weighted_n_node_arr[is_treated] = 0.0
-            self.sum_node_arr[is_treated] = 0.0
+            self.weighted_n_node_arr[is_treated] = .0
+            self.sum_node_arr[is_treated] = .0
 
         for p in range(start, end):
             i = samples[p]
@@ -125,10 +125,9 @@ cdef class DeconfoundClassification(Criterion):
                 self.sum_node_arr[is_treated] += w_y_ik
 
             self.weighted_n_node_arr[is_treated] += w
+            self.weighted_n_node_samples += w
 
             insert_sorted(&sorted_samples[start], i, p-start)
-
-        self.weighted_n_node_samples = self.weighted_n_node_arr[U_IX] + self.weighted_n_node_arr[T_IX]
             
         # Reset to pos=start
         self.reset()
@@ -144,11 +143,11 @@ cdef class DeconfoundClassification(Criterion):
         self.weighted_n_right = self.weighted_n_node_samples
 
         for is_treated in range(2):
-            self.weighted_n_left_arr[is_treated] = 0.0
+            self.weighted_n_left_arr[is_treated] = .0
             self.weighted_n_right_arr[is_treated] = self.weighted_n_node_arr[is_treated]
             self.sum_left_arr[is_treated] = .0
             self.sum_right_arr[is_treated] = self.sum_node_arr[is_treated]
-        
+
         for p in range(self.start, self.end):
             i = self.samples[p]
             self.children_mask[i] = R_IX
@@ -167,7 +166,7 @@ cdef class DeconfoundClassification(Criterion):
 
         for is_treated in range(2):
             self.weighted_n_left_arr[is_treated] = self.weighted_n_node_arr[is_treated]
-            self.weighted_n_right_arr[is_treated] = 0.0
+            self.weighted_n_right_arr[is_treated] = .0
             self.sum_left_arr[is_treated] = self.sum_node_arr[is_treated]
             self.sum_right_arr[is_treated] = .0
 
@@ -176,6 +175,7 @@ cdef class DeconfoundClassification(Criterion):
             self.children_mask[i] = L_IX
 
         self.pos = self.end
+
         return 0
 
     cdef int update(self, SIZE_t new_pos) nogil except -1:
@@ -238,7 +238,7 @@ cdef class DeconfoundClassification(Criterion):
 
                 self.weighted_n_left_arr[is_treated] -= w
                 self.children_mask[i] = R_IX
-    
+
         for is_treated in range(2):
             self.weighted_n_right_arr[is_treated] = self.weighted_n_node_arr[is_treated] - self.weighted_n_left_arr[is_treated]
             self.sum_right_arr[is_treated] = self.sum_node_arr[is_treated] - self.sum_left_arr[is_treated]
@@ -253,17 +253,36 @@ cdef class DeconfoundClassification(Criterion):
     cdef BoundaryRecord init_boundary(self, double max_score, double[2] sum_arr, double[2] weighted_n_arr) nogil:
 
         cdef BoundaryRecord br
-        br.threshold = max_score + SCORE_THRESHOLD
-        br.p_t = weighted_n_arr[T_IX] / (weighted_n_arr[U_IX] + weighted_n_arr[T_IX])
+
+        br.p_t = weighted_n_arr[T_IX] / (weighted_n_arr[T_IX] + weighted_n_arr[U_IX])
         br.p_u = 1 - br.p_t
-        br.reward = sum_arr[U_IX] / max(1, br.p_u)
-        br.tmf = weighted_n_arr[U_IX] /max(1, br.p_u)
+        br.shift = (sum_arr[U_IX] / weighted_n_arr[U_IX] + sum_arr[T_IX] / weighted_n_arr[T_IX]) / 2
+        
+        br.threshold = max_score + SCORE_THRESHOLD
+        br.pos = -1
+        br.reward = (sum_arr[U_IX] - br.shift * weighted_n_arr[U_IX]) / (1 - br.p_t)
         return br
 
+    cdef bint is_same_as_no_correction(self, BoundaryRecord br) nogil:
+
+        cdef SIZE_t[::1] sorted_samples = self.sorted_samples
+        cdef double[:] scores = self.scores
+        cdef SIZE_t pos = br.pos
+        cdef SIZE_t next_pos = br.next_pos
+
+        if pos == -1 and scores[sorted_samples[next_pos]] <= 0:
+            return 1
+        if next_pos == -1 and scores[sorted_samples[pos]] > 0:
+            return 1
+        if scores[sorted_samples[pos]] > 0 and scores[sorted_samples[next_pos]] <= 0:
+            return 1
+        return 0
 
     cdef BoundaryRecord node_decision_boundary(self) nogil:
         
         cdef BoundaryRecord curr, best
+        cdef double p_t
+        cdef double shift
 
         cdef double[:] scores = self.scores
         cdef double w = 1.0
@@ -273,20 +292,25 @@ cdef class DeconfoundClassification(Criterion):
         cdef SIZE_t start = self.start
         cdef SIZE_t end = self.end
         cdef SIZE_t p, i
-
+        cdef bint is_first = 1
+        
         i = self.sorted_samples[start]
         curr = self.init_boundary(scores[i], self.sum_node_arr, self.weighted_n_node_arr)
-        best = curr
 
         for p in range(start, end):
             i = self.sorted_samples[p]
+            curr.next_pos = p
 
             # Calculate total reward when we treat everyone with a prediction greater than scores[i].
-            if (curr.threshold > scores[i]):      
-                if (curr.reward * best.tmf) > (best.reward * curr.tmf):
+            if (curr.threshold > scores[i]):    
+                if is_first:
+                    best = curr  
+                    is_first = 0
+                elif curr.reward > best.reward:
                     best = curr
                 # Update bias so that observation i is treated
                 curr.threshold = scores[i] - SCORE_THRESHOLD
+                curr.pos = p
 
             # Update reward when observation i is treated
             if self.sample_weight is not None:
@@ -295,20 +319,24 @@ cdef class DeconfoundClassification(Criterion):
             cost_i = self.cost[i]
 
             if self.treated[i]:
-                curr.reward += w * (y_i - cost_i) / curr.p_t   # benefit - cost
-                curr.tmf += w / curr.p_t
+                curr.reward += w * (y_i - curr.shift) / curr.p_t  
             else:
-                curr.reward -= w * y_i / curr.p_u
-                curr.tmf -= w / curr.p_u
+                curr.reward -= w * (y_i - curr.shift) / curr.p_u
 
-        if (curr.reward * best.tmf) > (best.reward * curr.tmf):
+        curr.next_pos = -1
+        if curr.reward > best.reward:
             best = curr
+
+        if self.is_same_as_no_correction(best):
+            best.threshold = 0
 
         return best
 
     cdef BoundaryRecord* children_decision_boundary(self) nogil:
         
         cdef BoundaryRecord[2] curr, best
+        cdef double[2] p_t
+        cdef double[2] shift
 
         cdef double[:] scores = self.scores
         cdef double w = 1.0
@@ -317,25 +345,30 @@ cdef class DeconfoundClassification(Criterion):
 
         cdef SIZE_t start = self.start
         cdef SIZE_t end = self.end
-        cdef int is_left
+        cdef bint is_left
         cdef SIZE_t p, i
+        cdef bint[2] is_first
 
         i = self.sorted_samples[start]
+
         curr[L_IX] = self.init_boundary(scores[i], self.sum_left_arr, self.weighted_n_left_arr)
-        best[L_IX] = curr[L_IX]
         curr[R_IX] = self.init_boundary(scores[i], self.sum_right_arr, self.weighted_n_right_arr)
-        best[R_IX] = curr[R_IX]
 
         for p in range(start, end):
             i = self.sorted_samples[p]
             is_left = self.children_mask[i]
+            curr[is_left].next_pos = p
 
             # Calculate total reward when we treat everyone with a prediction greater than scores[i].
-            if (curr[is_left].threshold > scores[i]):      
-                if (curr[is_left].reward * best[is_left].tmf) > (best[is_left].reward * curr[is_left].tmf):
+            if (curr[is_left].threshold > scores[i]):    
+                if is_first[is_left]:
+                    best[is_left] = curr[is_left]
+                    is_first[is_left] = 0
+                elif curr[is_left].reward > best[is_left].reward:
                     best[is_left] = curr[is_left]
                 # Update bias so that observation i is treated
                 curr[is_left].threshold = scores[i] - SCORE_THRESHOLD
+                curr[is_left].pos = p
 
             # Update reward when observation i is treated
             if self.sample_weight is not None:
@@ -344,15 +377,17 @@ cdef class DeconfoundClassification(Criterion):
             cost_i = self.cost[i]
 
             if self.treated[i]:
-                curr[is_left].reward += w * (y_i - cost_i) / curr[is_left].p_t     # benefit - cost
-                curr[is_left].tmf += w / curr[is_left].p_t
+                curr[is_left].reward += w * (y_i - curr[is_left].shift) / curr[is_left].p_t     # benefit - cost
             else:
-                curr[is_left].reward -= w * y_i / (curr[is_left].p_u)
-                curr[is_left].tmf -= w / (curr[is_left].p_u)
+                curr[is_left].reward -= w * (y_i - curr[is_left].shift) / (curr[is_left].p_u)
 
         for is_left in range(2):
-            if (curr[is_left].reward * best[is_left].tmf) > (best[is_left].reward * curr[is_left].tmf):
+            curr[is_left].next_pos = -1
+            if curr[is_left].reward > best[is_left].reward:
                 best[is_left] = curr[is_left]
+
+            if self.is_same_as_no_correction(best[is_left]):
+                best[is_left].threshold = 0
 
         return best
 
@@ -364,7 +399,7 @@ cdef class DeconfoundClassification(Criterion):
 
         for k in range(self.n_outputs):
             boundary = self.node_decision_boundary()
-            impurity -= boundary.reward / max(1, boundary.tmf)
+            impurity -= boundary.reward / self.weighted_n_node_samples
 
         impurity /= self.n_outputs
 
@@ -386,8 +421,8 @@ cdef class DeconfoundClassification(Criterion):
         else:
             for k in range(self.n_outputs):
                 children_boundary = self.children_decision_boundary()
-                impurity_left[0] -= children_boundary[L_IX].reward / max(1, children_boundary[L_IX].tmf)
-                impurity_right[0] -= children_boundary[R_IX].reward / max(1, children_boundary[R_IX].tmf)
+                impurity_left[0] -= children_boundary[L_IX].reward / self.weighted_n_left
+                impurity_right[0] -= children_boundary[R_IX].reward / self.weighted_n_right
 
         impurity_left[0] /= self.n_outputs
         impurity_right[0] /= self.n_outputs
@@ -427,7 +462,7 @@ cdef class DeconfoundClassification(Criterion):
     def set_sample_parameters(self, int[:] treated, double[:] scores, double[:] cost):
         self.treated = treated
         self.scores = scores
-        self.cost = cost
+        self.cost = cost    
 
 cdef inline double calc_atan(double x) nogil:
     return atan(x)+2

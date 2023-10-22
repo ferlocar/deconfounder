@@ -1,7 +1,9 @@
+
 from sklearn.tree import DecisionTreeRegressor
 from deconfound_classification import DeconfoundClassification
-import numpy as np
 import pandas as pd
+import numpy as np
+
 
 class DeconfoundClassifier(DecisionTreeRegressor):
 
@@ -29,11 +31,14 @@ class DeconfoundClassifier(DecisionTreeRegressor):
     def score(self, X, y, sample_weight=None):
         # Greater is better
         X, y = np.array(X), np.array(y)
-        treatment, y_true, scores, cost = y[:, 0], y[:, 1], y[:, 2], y[:, 3]
-        
-        p_t = np.mean(treatment)
+        treatment, y_true, scores = y[:, 0], y[:, 1], y[:, 2]
+
+        # p_t = np.mean(treatment)
+        # shift = (np.mean(y_true[treatment==1]) + np.mean(y_true[treatment==0])) / 2
         corrected_scores = scores - self.predict(X)
         decision = (corrected_scores > 0)
-        p = treatment * p_t + (1-treatment) * (1 - p_t)
-        score_ = np.sum((decision == treatment) * y_true / p) / np.sum((decision == treatment) / p)
+        yd, td = y_true[decision], treatment[decision]
+        score_ = decision.mean() * (yd[td==1].mean() - yd[td==0].mean())
+        # reward = (y_true - shift) / (treatment * p_t + (1 - treatment) * (1 - p_t))
+        # score_ = np.mean((decision == treatment) * reward)
         return score_

@@ -1,12 +1,13 @@
 import numpy as np
 from sklearn.utils.extmath import stable_cumsum
 
-def mean_squared_error(cate, cate_pred):
+def MSE(cate, cate_pred):
 
     return np.mean((cate - cate_pred) ** 2)
 
-def causal_impact(cate, decisions):
+def causal_impact(cate, scores, threshold=0):
 
+    decisions = (scores > threshold)
     if np.all(decisions==0):
         return 0
     return cate[decisions].mean() * decisions.mean()
@@ -38,6 +39,12 @@ def uplift_curve(cate, scores, n_bins=200):
 def auuc_score(cate, scores, n_bins=200):
 
     n_samples = cate.shape[0]
+
+    # score is a number 
+    if isinstance(scores, (int, float)):
+        ate = np.mean(cate)
+        auuc = np.sum((np.arange(n_bins+1)/ n_bins) * ate)
+        return auuc
 
     num_all, curve_values = uplift_curve(cate, scores, n_bins)
     auuc = np.sum(curve_values / n_samples)

@@ -1,5 +1,6 @@
 from sklearn.tree._criterion cimport Criterion
 from sklearn.tree._criterion cimport SIZE_t
+import numpy as np
 
 from libc.stdlib cimport calloc
 from libc.stdlib cimport free
@@ -34,7 +35,7 @@ cdef class CausalCriterion(Criterion):
         cdef int is_treated
 
         # Default values
-        self.sample_weight = NULL
+        # self.sample_weight = NULL
 
         self.samples = NULL
         self.start = 0
@@ -61,7 +62,15 @@ cdef class CausalCriterion(Criterion):
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
 
-    cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
+    def __getstate__(self):
+        d = {}
+        d['treated'] = np.asarray(self.treated)
+        return d
+
+    def __setstate__(self, d):
+        self.treated = np.asarray(d['treated'])
+
+    cdef int init(self, const DOUBLE_t[:, ::1] y, const DOUBLE_t[:] sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
@@ -94,7 +103,7 @@ cdef class CausalCriterion(Criterion):
             i = samples[p]
             is_treated = self.treated[i]
 
-            if sample_weight != NULL:
+            if sample_weight is not None:
                 w = sample_weight[i]
 
             for k in range(self.n_outputs):
@@ -158,7 +167,7 @@ cdef class CausalCriterion(Criterion):
         cdef double* sq_sum_right = self.sq_sum_right_arr
         cdef double* sq_sum_total = self.sq_sum_total_arr
 
-        cdef double* sample_weight = self.sample_weight
+        cdef const DOUBLE_t[:] sample_weight = self.sample_weight
         cdef SIZE_t* samples = self.samples
 
         cdef SIZE_t pos = self.pos
@@ -184,7 +193,7 @@ cdef class CausalCriterion(Criterion):
                 i = samples[p]
                 is_treated = self.treated[i]
 
-                if sample_weight != NULL:
+                if sample_weight is not None:
                     w = sample_weight[i]
 
                 for k in range(self.n_outputs):
@@ -201,7 +210,7 @@ cdef class CausalCriterion(Criterion):
                 i = samples[p]
                 is_treated = self.treated[i]
 
-                if sample_weight != NULL:
+                if sample_weight is not None:
                     w = sample_weight[i]
 
                 for k in range(self.n_outputs):

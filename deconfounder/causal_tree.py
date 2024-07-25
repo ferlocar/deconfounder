@@ -1,5 +1,5 @@
 from sklearn.tree import DecisionTreeRegressor
-from .mse_causal import CausalCriterion
+from mse_causal import CausalCriterion
 import pandas as pd
 import numpy as np
 

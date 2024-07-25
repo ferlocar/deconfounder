@@ -1,5 +1,5 @@
 from sklearn.ensemble import RandomForestRegressor
-from .mse_causal import CausalCriterion
+from mse_causal import CausalCriterion
 import pandas as pd
 import numpy as np
 
@@ -10,7 +10,7 @@ class CausalForest(RandomForestRegressor):
         Replaces the string stored in criterion by an instance of a class.
         """
         self.criterion = CausalCriterion(1, X.shape[0])
-        treated = X.treated.values.astype(int)
+        treated = X.treated.values.astype(np.int32)
         self.criterion.set_treated(treated)
         X_base = X.loc[:, X.columns != 'treated']
         RandomForestRegressor.fit(self, X_base, y, sample_weight=sample_weight)

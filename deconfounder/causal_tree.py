@@ -3,6 +3,7 @@ from mse_causal import CausalCriterion
 import pandas as pd
 import numpy as np
 
+
 class CausalTree(DecisionTreeRegressor):
 
     def fit(self, X, y, sample_weight=None, check_input=True, X_idx_sorted=None):
